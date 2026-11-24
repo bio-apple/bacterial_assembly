@@ -6,17 +6,27 @@
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>{{ job.sample }} · 任务监控 · 微生物 NGS 数据分析系统</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  {% from "components/status_pill.html" import status_pill, status_labels_script %}
+  {{ status_labels_script() }}
+  <script src="{{ url_for('static', filename='log_viewer.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='confirm_dialog.js') }}" defer></script>
   <script src="{{ url_for('static', filename='job.js') }}" defer></script>
 </head>
 <body class="workbench">
   {% include "_topbar.html" %}
-  {% set status_labels = {"queued": "排队中", "running": "分析中", "cancelling": "取消中", "cancelled": "已取消", "succeeded": "已完成", "failed": "失败"} %}
   {% set state_labels = {"waiting": "等待", "running": "进行中", "done": "完成", "failed": "失败"} %}
   <main class="dashboard monitor-page" id="job-monitor" data-job-id="{{ job.id }}">
     <header class="monitor-intro">
       <div>
         <p class="eyebrow">LIVE TASK / {{ job.id[:8] }}</p>
         <p class="monitor-sample">{{ job.sample }} · {{ job.assemblers | join(" / ") }}</p>
+        {% if job.rerun_of %}
+        <p class="history-lineage">
+          <a href="{{ url_for('job_page', job_id=job.rerun_of) }}">原任务 {{ job.rerun_of[:8] }}</a>
+          <span aria-hidden="true">→</span>
+          <a href="{{ url_for('job_page', job_id=job.id) }}" aria-current="page">新任务 {{ job.id[:8] }}</a>
+        </p>
+        {% endif %}
         <p class="monitor-kicker">当前软件</p>
         <h1 id="current-software">{{ progress.current.software or "尚未开始" }}</h1>
       </div>
@@ -26,7 +36,7 @@
     <dl class="monitor-facts">
       <div>
         <dt>任务状态</dt>
-        <dd><span class="status-pill status-{{ job.status }}" id="job-status">{{ status_labels.get(job.status, job.status) }}</span></dd>
+        <dd>{{ status_pill(job.status, "job-status") }}</dd>
       </div>
       <div>
         <dt>当前阶段</dt>
@@ -94,8 +104,9 @@
         <h2 id="log-title">运行日志</h2>
         <p>日志保留命令和输出。阶段是否在跑，以上方记录为准。</p>
       </div>
-      <pre id="job-log" class="job-log" aria-live="polite"></pre>
+      {% include "components/log_viewer.html" %}
     </section>
   </main>
+  {% include "components/confirm_dialog.html" %}
 </body>
 </html>

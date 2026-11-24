@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>运行比较 · 微生物 NGS 数据分析系统</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="workbench">
+  {% include "_topbar.html" %}
+  <main class="dashboard compare-page">
+    <header class="compare-heading">
+      <div>
+        <p class="eyebrow">TWO RUNS / NO AVERAGE</p>
+        <h1>运行比较</h1>
+      </div>
+      <a class="monitor-back" href="{{ url_for('job_history') }}">返回处理历史</a>
+    </header>
+    <p class="compare-jobs">
+      <a href="{{ url_for('job_page', job_id=left.id) }}">{{ left.sample }} · {{ left.id[:8] }} · {{ status_labels[left.status] }}</a>
+      <span aria-hidden="true">/</span>
+      <a href="{{ url_for('job_page', job_id=right.id) }}">{{ right.sample }} · {{ right.id[:8] }} · {{ status_labels[right.status] }}</a>
+    </p>
+    <div class="compare-scroll">
+      <table class="compare-table">
+        <thead>
+          <tr>
+            <th scope="col">组装器</th>
+            <th scope="col">指标</th>
+            <th scope="col">{{ left.sample }} · {{ left.id[:8] }}</th>
+            <th scope="col">{{ right.sample }} · {{ right.id[:8] }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <th scope="row">{{ row.assembler }}</th>
+            <td>{{ row.metric }}</td>
+            <td>{% if row.left is none %}—{% else %}{{ row.left }}{% endif %}</td>
+            <td>{% if row.right is none %}—{% else %}{{ row.right }}{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+        <caption>以下数字来自两条任务各自写出的比较表。</caption>
+      </table>
+    </div>
+    <footer class="page-footer"><span>MICROBIAL NGS</span><span>RUN COMPARISON</span><span>RESULTS ARE USER-SCOPED</span></footer>
+  </main>
+</body>
+</html>

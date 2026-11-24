@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import csv
 import errno
 import hashlib
 import hmac
@@ -12,14 +13,16 @@ import tempfile
 import time
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from flask import (
     Flask,
     abort,
     current_app,
+    flash,
+    get_flashed_messages,
     jsonify,
     redirect,
     render_template,
@@ -28,16 +31,41 @@ from flask import (
     session,
     url_for,
 )
+from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash
 from werkzeug.utils import secure_filename
 
 from scripts.common import cpu_share
 from scripts.stage_record import build_progress, load_stage_record
+from web.errors import (
+    DISK_FULL,
+    FASTQ_EMPTY,
+    FASTQ_INVALID,
+    INTERNAL,
+    PARAMETER_KMER,
+    PARAMETER_THREADS,
+    RESOURCE_START,
+    UPLOAD_FAILED,
+    parameter_message,
+)
 from web.host_monitor import format_bytes, snapshot
-from web.modules import ANALYSIS_MODULES, BACTERIAL_ASSEMBLY_MODULE_ID
+from web.modules import ANALYSIS_MODULES, BACTERIAL_ASSEMBLY_MODULE_ID, group_enabled_modules
+from web.notices import note_disk, note_job
 
 ASSEMBLERS = ("spades", "unicycler", "shovill", "megahit")
+JOB_STATUSES = ("queued", "running", "cancelling", "cancelled", "succeeded", "failed")
+FINISHED_STATUSES = ("succeeded", "failed", "cancelled")
+JOB_STATUS_LABELS = {
+    "queued": "排队中",
+    "running": "分析中",
+    "cancelling": "取消中",
+    "cancelled": "已取消",
+    "succeeded": "已完成",
+    "failed": "失败",
+}
+RESULT_FILENAMES = {"comparison.tsv"}
+RESULT_SUFFIXES = (".fasta", ".fa", ".fna", ".fas")
 FASTQ_SUFFIXES = (".fastq", ".fq", ".fastq.gz", ".fq.gz")
 PATH_FIELDS = {
     "path",
@@ -69,6 +97,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     error TEXT,
     cancel_requested INTEGER NOT NULL DEFAULT 0,
     worker_pid INTEGER,
+    rerun_of TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     started_at TEXT,
@@ -93,6 +122,16 @@ CREATE TABLE IF NOT EXISTS uploads (
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS uploads_owner ON uploads(owner, created_at DESC);
+CREATE TABLE IF NOT EXISTS notices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner TEXT NOT NULL,
+    job_id TEXT,
+    kind TEXT NOT NULL,
+    message TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    read_at TEXT
+);
+CREATE INDEX IF NOT EXISTS notices_owner_id ON notices(owner, id DESC);
 """
 
 
@@ -246,6 +285,12 @@ def ensure_cancellation_schema(db: sqlite3.Connection) -> None:
     )
 
 
+def ensure_rerun_column(db: sqlite3.Connection) -> None:
+    columns = {info[1] for info in db.execute("PRAGMA table_info(jobs)")}
+    if "rerun_of" not in columns:
+        db.execute("ALTER TABLE jobs ADD COLUMN rerun_of TEXT")
+
+
 def append_job_log(log_path: str | Path, text: str) -> None:
     path = Path(log_path)
     line = text if text.endswith("\n") else text + "\n"
@@ -318,6 +363,7 @@ def create_app(test_config: dict | None = None) -> Flask:
                 "CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(status, sequence);"
             )
         ensure_cancellation_schema(db)
+        ensure_rerun_column(db)
         db.commit()
     finally:
         db.close()
@@ -351,6 +397,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             "active_page": {
                 "overview": "overview",
                 "job_history": "history",
+                "compare_jobs": "history",
                 "module_index": "modules",
                 "job_page": "monitor",
             }.get(request.endpoint, "modules"),
@@ -368,6 +415,32 @@ def create_app(test_config: dict | None = None) -> Flask:
             raise
         finally:
             db.close()
+
+    def fail(code: str, message: str, status: int):
+        return jsonify(code=code, message=message, error=message), status
+
+    def storage_error(error: OSError, log_message: str):
+        app.logger.exception(log_message)
+        if error.errno == errno.ENOSPC:
+            owner = session.get("username")
+            if owner:
+                try:
+                    with connection() as db:
+                        note_disk(db, owner)
+                except sqlite3.Error:
+                    app.logger.exception("Could not record disk notice")
+            return fail("disk_full", DISK_FULL, 507)
+        return fail("upload_failed", UPLOAD_FAILED, 507)
+
+    def upload_value_error(error: ValueError):
+        text = str(error)
+        if "不能开始分析" in text:
+            return fail("upload_incomplete", text, 400)
+        if "分片" in text:
+            return fail("upload_failed", "文件上传错误。{}".format(text), 400)
+        if "empty" in text.lower() or "FASTQ" in text:
+            return fail("fastq_invalid", FASTQ_EMPTY, 400)
+        return fail("upload_invalid", text, 400)
 
     def csrf_token() -> str:
         token = session.get("csrf_token")
@@ -387,7 +460,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         def wrapped(*args, **kwargs):
             if not session.get("username"):
                 if request.path.startswith("/api/"):
-                    return jsonify(error="Authentication required"), 401
+                    return fail("authentication_required", "需要登录。", 401)
                 return redirect(url_for("login"))
             return view(*args, **kwargs)
 
@@ -516,14 +589,39 @@ def create_app(test_config: dict | None = None) -> Flask:
     def host_status():
         return jsonify(host=host_view(app.config["DATA_ROOT"]))
 
+    def module_usage(owner: str) -> dict:
+        with connection() as db:
+            rows = db.execute(
+                "SELECT module_id, "
+                "SUM(status = 'queued') AS queued, "
+                "SUM(status = 'running') AS running, "
+                "SUM(status = 'cancelling') AS cancelling, "
+                "MAX(created_at) AS last_used_at "
+                "FROM jobs WHERE owner = ? GROUP BY module_id",
+                (owner,),
+            ).fetchall()
+        return {
+            row["module_id"]: {
+                "queued": row["queued"],
+                "running": row["running"],
+                "cancelling": row["cancelling"],
+                "last_used_at": row["last_used_at"],
+            }
+            for row in rows
+        }
+
     @app.get("/modules")
     @login_required
     def module_index():
+        modules = app.config["ANALYSIS_MODULES"]
         return render_template(
             "modules.html",
             username=session["username"],
             csrf_token=csrf_token(),
-            modules=app.config["ANALYSIS_MODULES"],
+            modules=modules,
+            categories=group_enabled_modules(
+                modules, module_usage(session["username"])
+            ),
         )
 
     @app.get("/")
@@ -536,45 +634,107 @@ def create_app(test_config: dict | None = None) -> Flask:
             assemblers=ASSEMBLERS,
         )
 
+    def history_filters() -> dict:
+        sample = request.args.get("sample", "")
+        if "\x00" in sample:
+            abort(400, description="样本名称不正确。")
+        module_id = request.args.get("module", "")
+        known_modules = {module["id"] for module in app.config["ANALYSIS_MODULES"]}
+        if module_id and module_id not in known_modules:
+            abort(400, description="没有这个分析模块。")
+        status = request.args.get("status", "")
+        if status and status not in JOB_STATUSES:
+            abort(400, description="没有这个任务状态。")
+        start = parse_filter_date(request.args.get("start", ""))
+        end = parse_filter_date(request.args.get("end", ""))
+        if start and end and start > end:
+            abort(400, description="日期范围不正确。")
+        return {
+            "sample": sample,
+            "module": module_id,
+            "status": status,
+            "start": start.isoformat() if start else "",
+            "end": end.isoformat() if end else "",
+            "start_date": start,
+            "end_date": end,
+        }
+
+    def present_history_job(row, modules, current_time) -> dict:
+        job = serialize_job(row)
+        module = modules.get(job["module_id"], {})
+        job["module_name"] = module.get("name", job["module_id"])
+        job["module_code"] = module.get("code", "—")
+        job["log_available"] = data_file(row["log_path"]) is not None
+        job["result_available"] = data_file(row["archive_path"]) is not None
+        job["inputs_available"] = inputs_ready(row)
+        job["result_files"] = notable_output_files(row["output_dir"])
+        job["runtime_seconds"] = elapsed_seconds(
+            job["started_at"], job["completed_at"], current_time
+        )
+        job["runtime_label"] = (
+            "等待开始" if job["runtime_seconds"] is None else format_duration(job["runtime_seconds"])
+        )
+        return job
+
     @app.get("/history")
     @login_required
     def job_history():
         page = parse_positive_int(request.args.get("page", "1"))
         if page is None:
             abort(400, description="page must be a positive integer")
+        filters = history_filters()
         page_size = 50
         owner = session["username"]
+        clauses = ["owner = ?"]
+        params: list = [owner]
+        if filters["sample"]:
+            clauses.append("instr(sample, ?) > 0")
+            params.append(filters["sample"])
+        if filters["module"]:
+            clauses.append("module_id = ?")
+            params.append(filters["module"])
+        if filters["status"]:
+            clauses.append("status = ?")
+            params.append(filters["status"])
+        if filters["start_date"]:
+            clauses.append("created_at >= ?")
+            params.append(filters["start"])
+        if filters["end_date"]:
+            clauses.append("created_at < ?")
+            params.append((filters["end_date"] + timedelta(days=1)).isoformat())
+        where = " AND ".join(clauses)
         with connection() as db:
             total_count = db.execute(
-                "SELECT COUNT(*) FROM jobs WHERE owner = ?", (owner,)
+                "SELECT COUNT(*) FROM jobs WHERE {}".format(where), tuple(params)
             ).fetchone()[0]
             total_pages = max(1, (total_count + page_size - 1) // page_size)
             page = min(page, total_pages)
             rows = db.execute(
-                "SELECT * FROM jobs WHERE owner = ? ORDER BY sequence DESC LIMIT ? OFFSET ?",
-                (owner, page_size, (page - 1) * page_size),
+                "SELECT * FROM jobs WHERE {} ORDER BY sequence DESC LIMIT ? OFFSET ?".format(where),
+                tuple(params + [page_size, (page - 1) * page_size]),
+            ).fetchall()
+            comparable_rows = db.execute(
+                "SELECT id, sample, status, output_dir, created_at FROM jobs "
+                "WHERE owner = ? AND status IN ('succeeded', 'failed', 'cancelled') "
+                "ORDER BY sequence DESC",
+                (owner,),
             ).fetchall()
 
         modules = {module["id"]: module for module in app.config["ANALYSIS_MODULES"]}
         current_time = datetime.now(timezone.utc)
-        history_jobs = []
-        for row in rows:
-            job = serialize_job(row)
-            module = modules.get(job["module_id"], {})
-            job["module_name"] = module.get("name", job["module_id"])
-            job["module_code"] = module.get("code", "—")
-            job["log_available"] = data_file(row["log_path"]) is not None
-            job["result_available"] = data_file(row["archive_path"]) is not None
-            job["runtime_seconds"] = elapsed_seconds(
-                job["started_at"], job["completed_at"], current_time
-            )
-            job["runtime_label"] = (
-                "等待开始"
-                if job["runtime_seconds"] is None
-                else format_duration(job["runtime_seconds"])
-            )
-            history_jobs.append(job)
-
+        history_jobs = [present_history_job(row, modules, current_time) for row in rows]
+        comparable_jobs = [
+            {
+                "id": row["id"],
+                "sample": row["sample"],
+                "status": row["status"],
+                "created_at": row["created_at"],
+            }
+            for row in comparable_rows
+            if comparison_file(row["output_dir"]) is not None
+        ]
+        filtered = any(filters[key] for key in ("sample", "module", "status", "start", "end"))
+        view_filters = {key: filters[key] for key in ("sample", "module", "status", "start", "end")}
         return render_template(
             "history.html",
             username=session["username"],
@@ -583,6 +743,40 @@ def create_app(test_config: dict | None = None) -> Flask:
             page=page,
             total_pages=total_pages,
             total_count=total_count,
+            filters=view_filters,
+            filtered=filtered,
+            status_choices=JOB_STATUSES,
+            status_labels=JOB_STATUS_LABELS,
+            comparable_jobs=comparable_jobs,
+            messages=get_flashed_messages(),
+        )
+
+    @app.get("/history/compare")
+    @login_required
+    def compare_jobs():
+        left_id = request.args.get("left", "")
+        right_id = request.args.get("right", "")
+        if not left_id or not right_id or left_id == right_id:
+            abort(400, description="请选择两个不同的任务。")
+        left = owned_job(left_id)
+        right = owned_job(right_id)
+        summaries = []
+        for row in (left, right):
+            if row["status"] not in FINISHED_STATUSES:
+                abort(400, description="只有已结束的任务可以比较。")
+            summary_path = comparison_file(row["output_dir"])
+            summary = parse_comparison_tsv(summary_path) if summary_path else []
+            if not summary:
+                abort(400, description="这条任务没有比较表，不能比较。")
+            summaries.append(summary)
+        return render_template(
+            "compare.html",
+            username=session["username"],
+            csrf_token=csrf_token(),
+            left=serialize_job(left),
+            right=serialize_job(right),
+            rows=align_comparison(summaries[0], summaries[1]),
+            status_labels=JOB_STATUS_LABELS,
         )
 
     @app.get("/api/jobs")
@@ -642,18 +836,22 @@ def create_app(test_config: dict | None = None) -> Flask:
         require_csrf()
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
-            return jsonify(error="上传参数不正确。"), 400
+            return fail("parameter_invalid", parameter_message("上传参数不正确。"), 400)
         if PATH_FIELDS.intersection(payload) or PATH_FIELDS.intersection(request.args):
-            return jsonify(error="不能通过请求指定服务器路径。"), 400
+            return fail("path_rejected", "不能通过请求指定服务器路径。", 400)
         filename = validated_fastq_name(payload.get("filename"))
         if filename is None:
-            return jsonify(error="文件名必须是 .fastq、.fq、.fastq.gz 或 .fq.gz，且不能包含路径。"), 400
+            return fail(
+                "fastq_invalid",
+                "FASTQ 格式错误。文件名必须是 .fastq、.fq、.fastq.gz 或 .fq.gz，且不能包含路径。",
+                400,
+            )
         size = parse_byte_size(payload.get("size"))
         if size is None:
-            return jsonify(error="文件是空的或大小不正确。"), 400
+            return fail("fastq_invalid", "FASTQ 格式错误。文件是空的或大小不正确。", 400)
         role = payload.get("role")
         if role not in ("r1", "r2"):
-            return jsonify(error="上传必须标明 R1 或 R2。"), 400
+            return fail("fastq_invalid", "FASTQ 格式错误。上传必须标明 R1 或 R2。", 400)
         chunk_size = app.config["UPLOAD_CHUNK_SIZE"]
         chunk_count = (size + chunk_size - 1) // chunk_size
         upload_id = str(uuid.uuid4())
@@ -661,9 +859,8 @@ def create_app(test_config: dict | None = None) -> Flask:
             directory = session_directory(app.config["STAGING_ROOT"], upload_id)
             directory.mkdir(parents=True)
             (directory / "chunks").mkdir()
-        except OSError:
-            app.logger.exception("Could not create upload staging directory")
-            return jsonify(error="Upload could not be stored; check server disk space."), 507
+        except OSError as error:
+            return storage_error(error, "Could not create upload staging directory")
         try:
             with connection() as db:
                 db.execute(
@@ -689,7 +886,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     def upload_status(upload_id):
         row = load_owned_upload(upload_id)
         if row is None:
-            return jsonify(error="找不到对应的上传。"), 404
+            return fail("not_found", "找不到对应的上传。", 404)
         return jsonify(upload=upload_payload(row))
 
     @app.put("/api/uploads/<upload_id>/chunks/<int:index>")
@@ -697,29 +894,28 @@ def create_app(test_config: dict | None = None) -> Flask:
     def upload_chunk(upload_id, index):
         require_csrf()
         if PATH_FIELDS.intersection(request.args):
-            return jsonify(error="不能通过请求指定服务器路径。"), 400
+            return fail("path_rejected", "不能通过请求指定服务器路径。", 400)
         row = load_owned_upload(upload_id)
         if row is None:
-            return jsonify(error="找不到对应的上传。"), 404
+            return fail("not_found", "找不到对应的上传。", 404)
         if row["status"] in ("completed", "consumed"):
-            return jsonify(error="上传已结束，不能再写入分片。"), 409
+            return fail("conflict", "上传已结束，不能再写入分片。", 409)
         if index < 0 or index >= row["chunk_count"]:
-            return jsonify(error="分片序号超出范围。"), 400
+            return fail("upload_failed", "文件上传错误。分片序号超出范围。", 400)
         expected = chunk_byte_length(row["size"], row["chunk_size"], index, row["chunk_count"])
         try:
             chunk_dir = session_directory(app.config["STAGING_ROOT"], row["id"]) / "chunks"
             chunk_dir.mkdir(parents=True, exist_ok=True)
             destination = chunk_dir / "{:08d}".format(index)
             if not is_inside(chunk_dir, destination):
-                return jsonify(error="不能通过请求指定服务器路径。"), 400
+                return fail("path_rejected", "不能通过请求指定服务器路径。", 400)
             skipped = destination.is_file() and destination.stat().st_size == expected
             if not skipped:
                 write_exact_stream(request.stream, destination, expected)
         except ValueError as error:
-            return jsonify(error=str(error)), 400
-        except OSError:
-            app.logger.exception("Could not store upload chunk")
-            return jsonify(error="Upload could not be stored; check server disk space."), 507
+            return upload_value_error(error)
+        except OSError as error:
+            return storage_error(error, "Could not store upload chunk")
         received = received_indexes(app.config["STAGING_ROOT"], row)
         status = "uploading" if received else row["status"]
         with connection() as db:
@@ -738,28 +934,28 @@ def create_app(test_config: dict | None = None) -> Flask:
         require_csrf()
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
-            return jsonify(error="上传参数不正确。"), 400
+            return fail("parameter_invalid", parameter_message("上传参数不正确。"), 400)
         if PATH_FIELDS.intersection(payload) or PATH_FIELDS.intersection(request.args):
-            return jsonify(error="不能通过请求指定服务器路径。"), 400
+            return fail("path_rejected", "不能通过请求指定服务器路径。", 400)
         supplied = payload.get("sha256")
         if not isinstance(supplied, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", supplied):
-            return jsonify(error="SHA-256 校验不一致。"), 400
+            return fail("checksum_mismatch", "SHA-256 校验不一致。", 400)
         supplied = supplied.lower()
         row = load_owned_upload(upload_id)
         if row is None:
-            return jsonify(error="找不到对应的上传。"), 404
+            return fail("not_found", "找不到对应的上传。", 404)
         if row["status"] == "consumed":
-            return jsonify(error="上传已结束，不能再写入分片。"), 409
+            return fail("conflict", "上传已结束，不能再写入分片。", 409)
         if row["status"] == "completed":
             if row["sha256"] == supplied:
                 return jsonify(upload=upload_payload(row))
-            return jsonify(error="SHA-256 校验不一致。"), 400
+            return fail("checksum_mismatch", "SHA-256 校验不一致。", 400)
         try:
             directory = session_directory(app.config["STAGING_ROOT"], row["id"])
             extension = fastq_extension(row["filename"])
             staged = directory / ("read" + extension)
             if not is_inside(directory, staged):
-                return jsonify(error="不能通过请求指定服务器路径。"), 400
+                return fail("path_rejected", "不能通过请求指定服务器路径。", 400)
             digest = assemble_upload(
                 directory / "chunks",
                 row["size"],
@@ -768,12 +964,11 @@ def create_app(test_config: dict | None = None) -> Flask:
                 staged,
             )
         except LookupError:
-            return jsonify(error="找不到对应的上传。"), 404
+            return fail("not_found", "找不到对应的上传。", 404)
         except ValueError as error:
-            return jsonify(error=str(error)), 400
-        except OSError:
-            app.logger.exception("Could not assemble upload")
-            return jsonify(error="Upload could not be stored; check server disk space."), 507
+            return upload_value_error(error)
+        except OSError as error:
+            return storage_error(error, "Could not assemble upload")
         if not hmac.compare_digest(digest, supplied):
             staged.unlink(missing_ok=True)
             with connection() as db:
@@ -783,17 +978,16 @@ def create_app(test_config: dict | None = None) -> Flask:
                     "WHERE id = ? AND owner = ?",
                     (row["id"], session["username"]),
                 )
-            return jsonify(error="SHA-256 校验不一致。"), 400
+            return fail("checksum_mismatch", "SHA-256 校验不一致。", 400)
         validated_dir = app.config["UPLOAD_VALIDATED"] / directory.name
         destination = validated_dir / staged.name
         try:
             if not is_inside(app.config["UPLOAD_VALIDATED"], destination):
                 raise ValueError("path is outside the data root")
             relocate_file(staged, destination)
-        except OSError:
+        except OSError as error:
             staged.unlink(missing_ok=True)
-            app.logger.exception("Could not store validated upload")
-            return jsonify(error="Upload could not be stored; check server disk space."), 507
+            return storage_error(error, "Could not store validated upload")
         try:
             with connection() as db:
                 cursor = db.execute(
@@ -820,18 +1014,16 @@ def create_app(test_config: dict | None = None) -> Flask:
     def create_job():
         require_csrf()
         if "threads" in request.values or "memory" in request.values:
-            return jsonify(
-                error="Thread count is automatic and memory settings are not configurable."
-            ), 400
+            return fail("parameter_invalid", PARAMETER_THREADS, 400)
         selected_assemblers = request.form.getlist("assembler")
         if not selected_assemblers or any(item not in ASSEMBLERS for item in selected_assemblers):
-            return jsonify(error="Select at least one valid assembler."), 400
+            return fail("parameter_invalid", parameter_message("请至少选择一种有效的组装软件。"), 400)
         if len(set(selected_assemblers)) != len(selected_assemblers):
-            return jsonify(error="An assembler cannot be selected more than once."), 400
+            return fail("parameter_invalid", parameter_message("同一种组装软件不能选择两次。"), 400)
         try:
             assembler_list = json.loads(request.form.get("assembler_order", "[]"))
         except json.JSONDecodeError:
-            return jsonify(error="Invalid assembler order."), 400
+            return fail("parameter_invalid", parameter_message("组装软件的顺序不正确。"), 400)
         if (
             not isinstance(assembler_list, list)
             or any(item not in ASSEMBLERS for item in assembler_list)
@@ -839,44 +1031,48 @@ def create_app(test_config: dict | None = None) -> Flask:
             or len(assembler_list) != len(selected_assemblers)
             or set(assembler_list) != set(selected_assemblers)
         ):
-            return jsonify(error="Assembler order does not match the selected tools."), 400
-        threads = cpu_share()
+            return fail("parameter_invalid", parameter_message("组装软件的顺序与所选工具不一致。"), 400)
+        try:
+            threads = cpu_share()
+        except (OSError, RuntimeError, ValueError):
+            app.logger.exception("Could not read CPU allocation")
+            return fail("resource_unavailable", RESOURCE_START, 503)
         sample = request.form.get("sample", "sample")
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", sample):
-            return jsonify(error="Sample name contains unsupported characters."), 400
+            return fail("parameter_invalid", parameter_message("样本名包含不支持的字符。"), 400)
         kmers_text = request.form.get("spades_kmers", "").strip()
         if kmers_text and "spades" not in assembler_list:
-            return jsonify(error="SPAdes options require selecting SPAdes."), 400
+            return fail("parameter_invalid", parameter_message("使用 SPAdes 参数时必须选择 SPAdes。"), 400)
         if kmers_text and not re.fullmatch(r"[1-9][0-9]*(,[1-9][0-9]*)*", kmers_text):
-            return jsonify(error="SPAdes k-mers must be comma-separated integers."), 400
+            return fail("parameter_invalid", PARAMETER_KMER, 400)
         if kmers_text and any(
             int(kmer) > 127 or int(kmer) % 2 == 0 for kmer in kmers_text.split(",")
         ):
-            return jsonify(error="SPAdes k-mers must be odd and at most 127."), 400
+            return fail("parameter_invalid", PARAMETER_KMER, 400)
         if request.form.get("spades_careful") and "spades" not in assembler_list:
-            return jsonify(error="SPAdes options require selecting SPAdes."), 400
+            return fail("parameter_invalid", parameter_message("使用 SPAdes 参数时必须选择 SPAdes。"), 400)
         if PATH_FIELDS.intersection(request.form) or PATH_FIELDS.intersection(request.args):
-            return jsonify(error="不能通过请求指定服务器路径。"), 400
+            return fail("path_rejected", "不能通过请求指定服务器路径。", 400)
 
         r1_session = request.form.get("r1_session", "").strip()
         r2_session = request.form.get("r2_session", "").strip()
         claimed = None
         if r1_session or r2_session:
             if not r1_session or not r2_session or r1_session == r2_session:
-                return jsonify(error="R1 和 R2 必须是两个不同的已完成上传。"), 400
+                return fail("fastq_invalid", "FASTQ 格式错误。R1 和 R2 必须是两个不同的已完成上传。", 400)
             try:
                 claimed = (
                     require_completed_upload(r1_session),
                     require_completed_upload(r2_session),
                 )
             except LookupError:
-                return jsonify(error="找不到对应的上传。"), 404
+                return fail("not_found", "找不到对应的上传。", 404)
             except ValueError as error:
-                return jsonify(error=str(error)), 400
+                return upload_value_error(error)
             if Path(claimed[0]["assembled_path"]).resolve() == Path(
                 claimed[1]["assembled_path"]
             ).resolve():
-                return jsonify(error="R1 和 R2 必须是两个不同的已完成上传。"), 400
+                return fail("fastq_invalid", "FASTQ 格式错误。R1 和 R2 必须是两个不同的已完成上传。", 400)
             read_names = tuple(
                 "R{}".format(index) + fastq_extension(upload["filename"])
                 for index, upload in enumerate(claimed, start=1)
@@ -885,7 +1081,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             r1 = request.files.get("r1")
             r2 = request.files.get("r2")
             if not r1 or not r2 or not valid_fastq_filename(r1.filename) or not valid_fastq_filename(r2.filename):
-                return jsonify(error="Upload both R1 and R2 as FASTQ or FASTQ.GZ files."), 400
+                return fail("fastq_invalid", FASTQ_INVALID, 400)
             read_names = (
                 "R1" + fastq_extension(r1.filename),
                 "R2" + fastq_extension(r2.filename),
@@ -986,15 +1182,15 @@ def create_app(test_config: dict | None = None) -> Flask:
                         )
                         if cursor.rowcount != 1:
                             raise ValueError("上传尚未完成或校验未通过，不能开始分析。")
-        except OSError:
+                note_job(db, session["username"], sample, job_id, "submitted")
+        except OSError as error:
             restore_staged_reads()
             discard_stored_files(stored_files, stored_dirs)
-            app.logger.exception("Could not save uploaded FASTQ files")
-            return jsonify(error="Upload could not be stored; check server disk space."), 507
+            return storage_error(error, "Could not save uploaded FASTQ files")
         except ValueError as error:
             restore_staged_reads()
             discard_stored_files(stored_files, stored_dirs)
-            return jsonify(error=str(error)), 400
+            return upload_value_error(error)
         except sqlite3.Error:
             restore_staged_reads()
             discard_stored_files(stored_files, stored_dirs)
@@ -1026,7 +1222,7 @@ def create_app(test_config: dict | None = None) -> Flask:
                 abort(404)
             status = row["status"]
             if status in ("succeeded", "failed", "cancelled", "cancelling"):
-                return jsonify(error="This job can no longer be cancelled."), 409
+                return fail("cancel_rejected", "这个任务已经不能取消。", 409)
             if status == "queued":
                 updated = db.execute(
                     "UPDATE jobs SET status = 'cancelled', cancel_requested = 1, "
@@ -1035,6 +1231,7 @@ def create_app(test_config: dict | None = None) -> Flask:
                     (timestamp, timestamp, job_id, session["username"]),
                 )
                 if updated.rowcount == 1:
+                    note_job(db, row["owner"], row["sample"], job_id, "cancelled")
                     try:
                         append_job_log(
                             contained_path(app.config["DATA_ROOT"], row["log_path"]),
@@ -1052,14 +1249,14 @@ def create_app(test_config: dict | None = None) -> Flask:
                 ).fetchone()
                 status = row["status"] if row else None
                 if status in ("succeeded", "failed", "cancelled", "cancelling"):
-                    return jsonify(error="This job can no longer be cancelled."), 409
+                    return fail("cancel_rejected", "这个任务已经不能取消。", 409)
             updated = db.execute(
                 "UPDATE jobs SET cancel_requested = 1, updated_at = ? "
                 "WHERE id = ? AND owner = ? AND status = 'running'",
                 (timestamp, job_id, session["username"]),
             )
             if updated.rowcount != 1:
-                return jsonify(error="This job can no longer be cancelled."), 409
+                return fail("cancel_rejected", "这个任务已经不能取消。", 409)
             fresh = db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         return jsonify(job=serialize_job(fresh)), 202
 
@@ -1090,7 +1287,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         try:
             offset = max(0, int(request.args.get("offset", "0")))
         except ValueError:
-            return jsonify(error="offset must be a non-negative integer"), 400
+            return fail("parameter_invalid", parameter_message("日志偏移必须是非负整数。"), 400)
         log_path = data_file(row["log_path"])
         if log_path is None:
             return jsonify(text="", offset=0, status=row["status"])
@@ -1134,9 +1331,164 @@ def create_app(test_config: dict | None = None) -> Flask:
             mimetype="application/gzip",
         )
 
+    @app.get("/api/jobs/<job_id>/files")
+    @login_required
+    def download_job_file(job_id):
+        row = owned_job(job_id)
+        path = resolve_output_file(row["output_dir"], request.args.get("name", ""))
+        download_name = secure_filename(path.name) or "result"
+        return send_file(
+            path,
+            as_attachment=True,
+            download_name=download_name,
+            mimetype="application/octet-stream",
+        )
+
+    def rerun_response(payload: dict, status_code: int):
+        wants_json = bool(request.headers.get("X-CSRF-Token")) or (
+            "application/json" in request.headers.get("Accept", "")
+        )
+        if wants_json:
+            return jsonify(payload), status_code
+        if status_code >= 400:
+            flash(payload.get("error") or "不能重新分析。")
+        else:
+            flash("已重新分析。新任务已排队，原来的结果还在。")
+        return redirect(url_for("job_history"))
+
+    @app.post("/api/jobs/<job_id>/rerun")
+    @login_required
+    def rerun_job(job_id):
+        require_csrf()
+        row = owned_job(job_id)
+        try:
+            assemblers = json.loads(row["assemblers"])
+        except (TypeError, json.JSONDecodeError):
+            assemblers = None
+        if not isinstance(assemblers, list) or not assemblers:
+            return rerun_response({"error": "原来的参数不完整，不能重新分析。"}, 409)
+        if not inputs_ready(row):
+            return rerun_response({"error": "原来的测序文件已经不在，不能重新分析。"}, 409)
+
+        new_id = str(uuid.uuid4())
+        job_dir = app.config["JOBS_ROOT"] / new_id
+        input_dir = job_dir / "input"
+        output_dir = job_dir / "output"
+        log_path = job_dir / "logs" / "job.log"
+        threads = cpu_share()
+        try:
+            for directory in (input_dir, job_dir / "work", output_dir, log_path.parent):
+                directory.mkdir(parents=True)
+            input_r1, input_r2 = copy_job_inputs(row, input_dir)
+            log_path.write_text(
+                "MODULE: {}\nSTATUS: queued\nRERUN OF: {}\n".format(row["module_id"], row["id"]),
+                encoding="utf-8",
+            )
+            with connection() as db:
+                db.execute(
+                    "INSERT INTO jobs (id, owner, module_id, status, assemblers, threads, "
+                    "sample, spades_kmers, spades_careful, input_r1, input_r2, "
+                    "output_dir, log_path, rerun_of) "
+                    "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        new_id,
+                        session["username"],
+                        row["module_id"],
+                        json.dumps(assemblers),
+                        threads,
+                        row["sample"],
+                        row["spades_kmers"],
+                        int(row["spades_careful"]),
+                        str(input_r1),
+                        str(input_r2),
+                        str(output_dir),
+                        str(log_path),
+                        row["id"],
+                    ),
+                )
+        except FileNotFoundError:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            return rerun_response({"error": "原来的测序文件已经不在，不能重新分析。"}, 409)
+        except OSError:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            app.logger.exception("Could not copy reads for a new analysis")
+            return rerun_response({"error": "新任务没有保存成功，请检查磁盘空间。"}, 507)
+        except sqlite3.Error:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            raise
+        return rerun_response(
+            {"job": {"id": new_id, "status": "queued", "rerun_of": row["id"]}},
+            202,
+        )
+
+    def notice_href(job_id: str | None) -> str:
+        if job_id and "job_page" in app.view_functions:
+            return url_for("job_page", job_id=job_id)
+        return url_for("job_history")
+
+    @app.get("/api/notices")
+    @login_required
+    def list_notices():
+        owner = session["username"]
+        with connection() as db:
+            rows = db.execute(
+                "SELECT id, job_id, kind, message, created_at, read_at FROM notices "
+                "WHERE owner = ? ORDER BY id DESC LIMIT 40",
+                (owner,),
+            ).fetchall()
+            unread = db.execute(
+                "SELECT COUNT(*) FROM notices WHERE owner = ? AND read_at IS NULL",
+                (owner,),
+            ).fetchone()[0]
+        return jsonify(
+            unread=unread,
+            notices=[
+                {
+                    "id": row["id"],
+                    "job_id": row["job_id"],
+                    "kind": row["kind"],
+                    "message": row["message"],
+                    "created_at": row["created_at"],
+                    "read": row["read_at"] is not None,
+                    "href": notice_href(row["job_id"]),
+                }
+                for row in rows
+            ],
+        )
+
+    @app.post("/api/notices/read")
+    @login_required
+    def read_notices():
+        require_csrf()
+        with connection() as db:
+            db.execute(
+                "UPDATE notices SET read_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
+                "WHERE owner = ? AND read_at IS NULL",
+                (session["username"],),
+            )
+        return jsonify(ok=True)
+
+    def public_server_error():
+        if request.path.startswith("/api/"):
+            return fail("internal_error", INTERNAL, 500)
+        return render_template("error.html", message=INTERNAL), 500
+
     @app.errorhandler(413)
     def request_too_large(_error):
-        return jsonify(error="Upload was rejected by the server or proxy size limit."), 413
+        return fail("upload_failed", "文件上传错误。上传超过了服务器允许的大小。", 413)
+
+    @app.errorhandler(500)
+    def internal_server_error(error):
+        original = getattr(error, "original_exception", None)
+        app.logger.error("Request failed", exc_info=original or error)
+        return public_server_error()
+
+    @app.errorhandler(Exception)
+    def unhandled_error(error):
+        if isinstance(error, HTTPException):
+            return error
+        app.logger.exception("Unhandled request error")
+        return public_server_error()
 
     return app
 
@@ -1294,6 +1646,177 @@ def host_view(data_root: Path) -> dict:
     return view
 
 
+def parse_filter_date(value: str | None):
+    if value is None or value == "":
+        return None
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        abort(400, description="日期范围不正确。")
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        abort(400, description="日期范围不正确。")
+
+
+def output_name_rejected(name: str) -> bool:
+    if not name or any(ord(char) < 32 for char in name):
+        return True
+    if name.startswith(("/", "\\")) or "\\" in name or ".." in name:
+        return True
+    path = PurePosixPath(name)
+    if path.is_absolute():
+        return True
+    parts = path.parts
+    return not parts or any(part in ("", ".", "..") for part in parts)
+
+
+def resolve_output_file(output_dir: str, name: str) -> Path:
+    if output_name_rejected(name):
+        abort(400, description="不能下载这个路径。")
+    try:
+        root = contained_path(current_app.config["DATA_ROOT"], output_dir)
+    except (OSError, ValueError):
+        abort(404)
+    if root.is_symlink() or not root.is_dir():
+        abort(404)
+    current = root
+    for part in PurePosixPath(name).parts:
+        current = current / part
+        try:
+            if current.is_symlink():
+                abort(400, description="不能下载这个路径。")
+            if not current.exists():
+                abort(404)
+        except OSError:
+            abort(404)
+    if current.is_symlink() or not is_inside(root, current):
+        abort(400, description="不能下载这个路径。")
+    if not current.is_file():
+        abort(404)
+    return current
+
+
+def notable_output_files(output_dir: str) -> list[str]:
+    try:
+        root = contained_path(current_app.config["DATA_ROOT"], output_dir)
+    except (OSError, ValueError):
+        return []
+    if root.is_symlink() or not root.is_dir():
+        return []
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        current = Path(dirpath)
+        dirnames[:] = [item for item in dirnames if not (current / item).is_symlink()]
+        for filename in filenames:
+            path = current / filename
+            if path.is_symlink() or not path.is_file():
+                continue
+            lowered = filename.lower()
+            if lowered in RESULT_FILENAMES or lowered.endswith(RESULT_SUFFIXES):
+                found.append(path.relative_to(root).as_posix())
+    found.sort()
+    return found
+
+
+def comparison_file(output_dir: str) -> Path | None:
+    try:
+        root = contained_path(current_app.config["DATA_ROOT"], output_dir)
+    except (OSError, ValueError):
+        return None
+    candidate = root / "comparison.tsv"
+    try:
+        if candidate.is_symlink() or not candidate.is_file() or not is_inside(root, candidate):
+            return None
+    except OSError:
+        return None
+    return candidate
+
+
+def inputs_ready(row) -> bool:
+    seen = []
+    for key in ("input_r1", "input_r2"):
+        raw = row[key] if key in row.keys() else None
+        if not raw:
+            return False
+        try:
+            path = contained_path(current_app.config["DATA_ROOT"], raw)
+            if path.is_symlink() or not path.is_file() or path.stat().st_size <= 0:
+                return False
+        except (OSError, ValueError):
+            return False
+        seen.append(path)
+    return len(seen) == 2
+
+
+def copy_job_inputs(row, input_dir: Path) -> tuple[Path, Path]:
+    copied = []
+    for index, key in enumerate(("input_r1", "input_r2"), start=1):
+        source = contained_path(current_app.config["DATA_ROOT"], row[key])
+        if source.is_symlink() or not source.is_file() or source.stat().st_size <= 0:
+            raise FileNotFoundError(key)
+        destination = input_dir / "R{}{}".format(index, "".join(source.suffixes))
+        if not is_inside(input_dir, destination):
+            raise ValueError("path is outside the data root")
+        shutil.copyfile(source, destination)
+        copied.append(destination)
+    return copied[0], copied[1]
+
+
+def parse_comparison_tsv(path: Path | None) -> list[dict]:
+    if path is None:
+        return []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    rows = list(csv.reader(text.splitlines(), delimiter="\t"))
+    if not rows:
+        return []
+    metrics = [cell for cell in rows[0][1:] if cell]
+    parsed = []
+    for row in rows[1:]:
+        if not row or not str(row[0]).strip():
+            continue
+        values = {}
+        metric_index = 0
+        for cell_index, metric in enumerate(rows[0][1:], start=1):
+            if not metric:
+                continue
+            values[metrics[metric_index]] = row[cell_index] if cell_index < len(row) else ""
+            metric_index += 1
+        parsed.append({"assembler": row[0], "metrics": values})
+    return parsed
+
+
+def align_comparison(left: list[dict], right: list[dict]) -> list[dict]:
+    metric_order = []
+    assembler_order = []
+    for side in (left, right):
+        for item in side:
+            if item["assembler"] not in assembler_order:
+                assembler_order.append(item["assembler"])
+            for metric in item["metrics"]:
+                if metric not in metric_order:
+                    metric_order.append(metric)
+    left_map = {item["assembler"]: item["metrics"] for item in left}
+    right_map = {item["assembler"]: item["metrics"] for item in right}
+    aligned = []
+    for assembler in assembler_order:
+        for metric in metric_order:
+            left_metrics = left_map.get(assembler, {})
+            right_metrics = right_map.get(assembler, {})
+            if metric not in left_metrics and metric not in right_metrics:
+                continue
+            aligned.append(
+                {
+                    "assembler": assembler,
+                    "metric": metric,
+                    "left": left_metrics.get(metric) if metric in left_metrics else None,
+                    "right": right_metrics.get(metric) if metric in right_metrics else None,
+                }
+            )
+    return aligned
+
+
 def parse_positive_int(value: str) -> int | None:
     try:
         parsed = int(value)
@@ -1339,6 +1862,7 @@ def serialize_job(row: sqlite3.Row) -> dict:
         "threads": row["threads"],
         "archive_available": data_file(row["archive_path"]) is not None,
         "sample": row["sample"],
+        "rerun_of": row["rerun_of"] if "rerun_of" in row.keys() else None,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "started_at": row["started_at"],

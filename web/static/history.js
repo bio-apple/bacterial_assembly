@@ -25,6 +25,10 @@
   const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
   document.querySelectorAll("[data-cancel-job]").forEach((button) => {
     button.addEventListener("click", async () => {
+      if (window.confirmAction) {
+        const accepted = await window.confirmAction("取消任务");
+        if (!accepted) return;
+      }
       button.disabled = true;
       const response = await fetch(`/api/jobs/${encodeURIComponent(button.dataset.cancelJob)}/cancel`, {
         method: "POST",
@@ -33,6 +37,33 @@
       });
       if (response.status === 401) {
         window.location.assign("/login");
+        return;
+      }
+      window.location.reload();
+    });
+  });
+
+  document.querySelectorAll("[data-rerun-job]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (window.confirmAction) {
+        const accepted = await window.confirmAction("重新分析");
+        if (!accepted) return;
+      }
+      button.disabled = true;
+      const response = await fetch(`/api/jobs/${encodeURIComponent(button.dataset.rerunJob)}/rerun`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": csrf || "", Accept: "application/json" },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        window.location.assign("/login");
+        return;
+      }
+      if (!response.ok) {
+        button.disabled = false;
+        const note = button.parentElement.querySelector(".history-rerun-error");
+        if (note) note.textContent = payload.error || "不能重新分析。";
         return;
       }
       window.location.reload();

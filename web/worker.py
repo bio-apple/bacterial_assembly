@@ -10,12 +10,16 @@ import subprocess
 import sys
 import tarfile
 import time
+import traceback
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from scripts.stage_record import load_stage_record
 from web.app import append_job_log, contained_path, create_app
+from web.errors import WORKER_INTERRUPTED, explain_job_failure
+from web.notices import note_disk, note_job, volume_is_low
 
 
 @contextmanager
@@ -130,11 +134,19 @@ def cancellation_requested(database: Path, job_id: str) -> bool:
 
 def mark_cancelling(database: Path, job_id: str) -> None:
     with connect(database) as db:
-        db.execute(
+        updated = db.execute(
             "UPDATE jobs SET status = 'cancelling', updated_at = ? "
             "WHERE id = ? AND status = 'running'",
             (now(), job_id),
         )
+        if updated.rowcount != 1:
+            return
+        row = db.execute(
+            "SELECT owner, sample FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        if row:
+            note_job(db, row["owner"], row["sample"], job_id, "cancelling")
 
 
 def set_worker_pid(database: Path, job_id: str, pid: int | None) -> None:
@@ -153,6 +165,10 @@ def finalize_cancelled(database: Path, job_id: str, log_path: Path | None, pipel
             if log_path is not None:
                 append_job_log(log_path, "Could not remove incomplete tool temp: {}".format(error))
     with connect(database) as db:
+        row = db.execute(
+            "SELECT owner, sample FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
         updated = db.execute(
             "UPDATE jobs SET status = 'cancelled', error = NULL, worker_pid = NULL, "
             "updated_at = ?, completed_at = ? "
@@ -160,6 +176,8 @@ def finalize_cancelled(database: Path, job_id: str, log_path: Path | None, pipel
             (now(), now(), job_id),
         )
         changed = updated.rowcount == 1
+        if changed and row:
+            note_job(db, row["owner"], row["sample"], job_id, "cancelled")
     if changed and log_path is not None:
         append_job_log(log_path, "STATUS: cancelled")
 
@@ -167,7 +185,7 @@ def finalize_cancelled(database: Path, job_id: str, log_path: Path | None, pipel
 def recover_interrupted_jobs(database: Path) -> None:
     with connect(database) as db:
         rows = db.execute(
-            "SELECT id, status, cancel_requested, worker_pid, log_path FROM jobs "
+            "SELECT id, owner, sample, status, cancel_requested, worker_pid, log_path FROM jobs "
             "WHERE status IN ('running', 'cancelling')"
         ).fetchall()
     for row in rows:
@@ -177,20 +195,24 @@ def recover_interrupted_jobs(database: Path) -> None:
     with connect(database) as db:
         for row in rows:
             if row["status"] == "cancelling" or row["cancel_requested"]:
-                db.execute(
+                updated = db.execute(
                     "UPDATE jobs SET status = 'cancelled', worker_pid = NULL, "
                     "updated_at = ?, completed_at = ? "
                     "WHERE id = ? AND status IN ('running', 'cancelling')",
                     (timestamp, timestamp, row["id"]),
                 )
+                if updated.rowcount == 1:
+                    note_job(db, row["owner"], row["sample"], row["id"], "cancelled")
                 append_job_log(row["log_path"], "STATUS: cancelled")
             else:
-                db.execute(
+                updated = db.execute(
                     "UPDATE jobs SET status = 'failed', worker_pid = NULL, "
-                    "error = 'Worker stopped while this job was running; submit a new job.', "
-                    "updated_at = ?, completed_at = ? WHERE id = ? AND status = 'running'",
-                    (timestamp, timestamp, row["id"]),
+                    "error = ?, updated_at = ?, completed_at = ? "
+                    "WHERE id = ? AND status = 'running'",
+                    (WORKER_INTERRUPTED, timestamp, timestamp, row["id"]),
                 )
+                if updated.rowcount == 1:
+                    note_job(db, row["owner"], row["sample"], row["id"], "failed")
 
 
 def claim_next_job(database: Path):
@@ -198,14 +220,17 @@ def claim_next_job(database: Path):
         db.execute("BEGIN IMMEDIATE")
         timestamp = now()
         pending = db.execute(
-            "SELECT id, log_path FROM jobs WHERE status = 'queued' AND cancel_requested = 1"
+            "SELECT id, owner, sample, log_path FROM jobs "
+            "WHERE status = 'queued' AND cancel_requested = 1"
         ).fetchall()
         for row in pending:
-            db.execute(
+            updated = db.execute(
                 "UPDATE jobs SET status = 'cancelled', updated_at = ?, completed_at = ? "
                 "WHERE id = ? AND status = 'queued'",
                 (timestamp, timestamp, row["id"]),
             )
+            if updated.rowcount == 1:
+                note_job(db, row["owner"], row["sample"], row["id"], "cancelled")
             append_job_log(row["log_path"], "STATUS: cancelled")
         job = db.execute(
             "SELECT * FROM jobs WHERE status = 'queued' AND cancel_requested = 0 "
@@ -219,6 +244,8 @@ def claim_next_job(database: Path):
             "WHERE id = ? AND status = 'queued' AND cancel_requested = 0",
             (timestamp, timestamp, job["id"]),
         )
+        if updated.rowcount == 1:
+            note_job(db, job["owner"], job["sample"], job["id"], "running")
         db.commit()
         if updated.rowcount != 1:
             return None
@@ -235,6 +262,13 @@ def update_job(database: Path, job_id: str, status: str, **fields) -> None:
             "UPDATE jobs SET {} WHERE id = ?".format(assignments),
             (*fields.values(), job_id),
         )
+        if status in ("succeeded", "failed", "cancelled"):
+            row = db.execute(
+                "SELECT owner, sample FROM jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            if row:
+                note_job(db, row["owner"], row["sample"], job_id, status)
 
 
 def publish_directory(source: Path, destination: Path) -> None:
@@ -249,6 +283,43 @@ def publish_directory(source: Path, destination: Path) -> None:
             shutil.move(str(child), str(target))
 
 
+def remember_low_disk(app, job) -> None:
+    try:
+        low = volume_is_low(app.config["DATA_ROOT"])
+    except OSError:
+        return
+    if not low:
+        return
+    with connect(app.config["DATABASE"]) as db:
+        note_disk(db, job["owner"], job["sample"], job["id"])
+
+
+def _log_text(log_path: Path | None) -> str:
+    if log_path is None or not log_path.is_file():
+        return ""
+    try:
+        return log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _stages(pipeline_output_dir: Path | None):
+    if pipeline_output_dir is None:
+        return []
+    return load_stage_record(pipeline_output_dir / "stages.json").get("stages") or []
+
+
+def failure_message(returncode, error, log_path, pipeline_output_dir, partial: bool) -> str:
+    _code, message = explain_job_failure(
+        returncode,
+        error,
+        _log_text(log_path),
+        _stages(pipeline_output_dir),
+        partial,
+    )
+    return message
+
+
 def process_next_job(app) -> bool:
     job = claim_next_job(app.config["DATABASE"])
     if job is None:
@@ -258,6 +329,8 @@ def process_next_job(app) -> bool:
     log_path = None
     pipeline_output_dir = None
     cancelled = False
+    returncode = None
+    remember_low_disk(app, job)
     try:
         output_dir = contained_path(data_root, job["output_dir"])
         log_path = contained_path(data_root, job["log_path"])
@@ -360,7 +433,7 @@ def process_next_job(app) -> bool:
             error=(
                 None
                 if returncode == 0
-                else "Some selected methods failed; download available partial results and review the job log."
+                else failure_message(returncode, None, log_path, pipeline_output_dir, True)
             ),
         )
     except Exception as error:
@@ -372,15 +445,21 @@ def process_next_job(app) -> bool:
         try:
             if log_path is not None:
                 with log_path.open("a", encoding="utf-8") as log_file:
-                    log_file.write("\nWEB WORKER ERROR: {}\n".format(error))
+                    log_file.write("\nWEB WORKER ERROR:\n{}\n".format(traceback.format_exc()))
         except OSError as log_error:
             print("Could not append job error to {}: {}".format(log_path, log_error), file=sys.stderr)
+        if isinstance(error, OSError) and error.errno == errno.ENOSPC:
+            try:
+                with connect(app.config["DATABASE"]) as db:
+                    note_disk(db, job["owner"], job["sample"], job["id"])
+            except sqlite3.Error:
+                print("Could not record disk notice for {}".format(job["id"]), file=sys.stderr)
         update_job(
             app.config["DATABASE"],
             job["id"],
             "failed",
             worker_pid=None,
-            error="The analysis failed. Review the job log for details.",
+            error=failure_message(returncode, error, log_path, pipeline_output_dir, False),
         )
     return True
 

@@ -6,23 +6,64 @@
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>处理历史 · 微生物 NGS 数据分析系统</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='confirm_dialog.js') }}" defer></script>
   <script src="{{ url_for('static', filename='history.js') }}" defer></script>
 </head>
 <body class="workbench">
   {% include "_topbar.html" %}
+  {% from "components/status_pill.html" import status_pill %}
   <main class="dashboard history-page">
     <section class="history-intro" aria-labelledby="history-title">
       <div>
-        <p class="eyebrow">RUN LEDGER / USER SCOPE</p>
+        <p class="eyebrow">TASK BENCH / USER SCOPE</p>
         <h1 id="history-title">处理历史</h1>
-        <p>按样本回看分析模块、任务状态与实际运行时间。</p>
+        <p>按样本名称查找任务，下载结果，或重新分析。重新分析会新建一条任务，沿用这次的参数和测序文件，并记下原任务。原来的结果会保留。</p>
       </div>
       <div class="history-total">
         <strong>{{ total_count }}</strong>
-        <span>条样本处理记录</span>
+        <span>{% if filtered %}条符合条件的任务{% else %}条样本处理记录{% endif %}</span>
         <small>时间按浏览器时区显示</small>
       </div>
     </section>
+
+    {% for message in messages %}
+    <p class="history-flash" role="status">{{ message }}</p>
+    {% endfor %}
+
+    <form class="history-filters" method="get" action="{{ url_for('job_history') }}" aria-label="筛选任务">
+      <label>样本名称
+        <input name="sample" value="{{ filters.sample }}" autocomplete="off" spellcheck="false">
+      </label>
+      <label>分析模块
+        <select name="module">
+          <option value="">全部模块</option>
+          {% for module in analysis_modules %}
+          <option value="{{ module.id }}" {% if filters.module == module.id %}selected{% endif %}>{{ module.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>任务状态
+        <select name="status">
+          <option value="">全部状态</option>
+          {% for status in status_choices %}
+          <option value="{{ status }}" {% if filters.status == status %}selected{% endif %}>{{ status_labels[status] }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>开始日期
+        <input type="date" name="start" value="{{ filters.start }}">
+      </label>
+      <label>结束日期
+        <input type="date" name="end" value="{{ filters.end }}">
+      </label>
+      <div class="history-filter-actions">
+        <button class="button button-primary" type="submit">筛选</button>
+        {% if filtered %}
+        <a class="history-clear" href="{{ url_for('job_history') }}">清除筛选</a>
+        {% endif %}
+      </div>
+    </form>
+    <p class="history-filter-note">样本名称按原文匹配，区分大小写。日期按提交时间，开始和结束当天都包含。几个条件同时生效。</p>
 
     <section class="history-panel" aria-label="样本处理记录">
       <div class="history-columns" aria-hidden="true">
@@ -37,8 +78,17 @@
         {% for job in jobs %}
         <article class="history-entry state-{{ job.status }}">
           <div class="history-cell history-sample" data-label="样本 / 提交时间">
-            <strong>{{ job.sample }}</strong>
+            <a class="history-sample-link" href="{{ url_for('job_page', job_id=job.id) }}" aria-label="查看 {{ job.sample }} 的任务详情">
+              <strong>{{ job.sample }}</strong>
+            </a>
             <span class="history-job-id">任务 {{ job.id[:8] }}</span>
+            {% if job.rerun_of %}
+            <p class="history-lineage">
+              <a href="{{ url_for('job_page', job_id=job.rerun_of) }}">原任务 {{ job.rerun_of[:8] }}</a>
+              <span aria-hidden="true">→</span>
+              <a href="{{ url_for('job_page', job_id=job.id) }}">新任务 {{ job.id[:8] }}</a>
+            </p>
+            {% endif %}
             <time class="local-time" data-timestamp="{{ job.created_at }}" datetime="{{ job.created_at }}">
               {{ job.created_at }}
             </time>
@@ -52,9 +102,7 @@
             </span>
           </div>
           <div class="history-cell history-status" data-label="任务状态">
-            <span class="status-pill status-{{ job.status }}">
-              {{ {"queued": "排队中", "running": "分析中", "cancelling": "取消中", "cancelled": "已取消", "succeeded": "已完成", "failed": "失败"}.get(job.status, job.status) }}
-            </span>
+            {{ status_pill(job.status) }}
             <a class="history-monitor" href="{{ url_for('job_page', job_id=job.id) }}">查看进度</a>
             {% if job.result_available %}
             <a class="history-result-download" href="{{ url_for('download_job', job_id=job.id) }}"
@@ -103,8 +151,25 @@
             <span class="runtime-value">{{ job.runtime_label }}</span>
             {% endif %}
           </div>
+          <div class="history-actions" data-label="操作">
+            {% for name in job.result_files %}
+            <a class="history-file" href="{{ url_for('download_job_file', job_id=job.id, name=name) }}">{{ name }}</a>
+            {% endfor %}
+            {% if job.inputs_available %}
+            <button type="button" class="history-rerun" data-rerun-job="{{ job.id }}">重新分析</button>
+            <p class="history-rerun-error" role="alert"></p>
+            {% else %}
+            <p class="history-rerun-error">原来的测序文件已经不在，不能重新分析。</p>
+            {% endif %}
+          </div>
         </article>
         {% endfor %}
+      </div>
+      {% elif filtered %}
+      <div class="history-empty">
+        <h2>没有符合条件的任务</h2>
+        <p>放宽样本名称、分析模块、任务状态或日期范围。样本名称区分大小写，几个条件要同时满足。</p>
+        <a class="button button-primary" href="{{ url_for('job_history') }}">清除筛选</a>
       </div>
       {% else %}
       <div class="history-empty">
@@ -121,15 +186,45 @@
       <span>第 {{ page }} / {{ total_pages }} 页 · 共 {{ total_count }} 条</span>
       <div>
         {% if page > 1 %}
-        <a href="{{ url_for('job_history', page=page - 1) }}">← 上一页</a>
+        <a href="{{ url_for('job_history', page=page - 1, sample=filters.sample or none, module=filters.module or none, status=filters.status or none, start=filters.start or none, end=filters.end or none) }}">← 上一页</a>
         {% endif %}
         {% if page < total_pages %}
-        <a href="{{ url_for('job_history', page=page + 1) }}">下一页 →</a>
+        <a href="{{ url_for('job_history', page=page + 1, sample=filters.sample or none, module=filters.module or none, status=filters.status or none, start=filters.start or none, end=filters.end or none) }}">下一页 →</a>
         {% endif %}
       </div>
     </nav>
     {% endif %}
+
+    <section class="history-compare" aria-labelledby="compare-title">
+      <p class="eyebrow">TWO RUNS</p>
+      <h2 id="compare-title">运行比较</h2>
+      {% if comparable_jobs|length >= 2 %}
+      <p>选择两条已结束、并且写出比较表的任务。两边的指标并排显示。</p>
+      <form class="history-compare-form" method="get" action="{{ url_for('compare_jobs') }}">
+        <label>任务甲
+          <select name="left" required>
+            <option value="">选择任务</option>
+            {% for job in comparable_jobs %}
+            <option value="{{ job.id }}">{{ job.sample }} · {{ job.id[:8] }} · {{ status_labels[job.status] }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>任务乙
+          <select name="right" required>
+            <option value="">选择任务</option>
+            {% for job in comparable_jobs %}
+            <option value="{{ job.id }}">{{ job.sample }} · {{ job.id[:8] }} · {{ status_labels[job.status] }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button class="button button-primary" type="submit">运行比较</button>
+      </form>
+      {% else %}
+      <p>至少需要两条已结束、并且写出比较表的任务，才能运行比较。</p>
+      {% endif %}
+    </section>
     <footer class="page-footer"><span>MICROBIAL NGS</span><span>RUN HISTORY</span><span>RESULTS ARE USER-SCOPED</span></footer>
   </main>
+  {% include "components/confirm_dialog.html" %}
 </body>
 </html>

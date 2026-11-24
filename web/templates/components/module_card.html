@@ -1,0 +1,42 @@
+<a class="instrument-card" href="{{ url_for(module.endpoint) }}">
+  <div class="instrument-head">
+    <span class="instrument-code">{{ module.code }}</span>
+    <div class="instrument-title">
+      <span class="instrument-id">{{ module.id }}</span>
+      <h3>{{ module.name }}</h3>
+      <p>{{ module.description|default("进入此模块配置分析任务并查看结果。") }}</p>
+    </div>
+    <div class="instrument-flags">
+      <span class="instrument-version">模块版本 {{ module.version|default("—", true) }}</span>
+      <span class="instrument-enabled">已启用</span>
+    </div>
+  </div>
+  <p class="instrument-purpose">{{ module.purpose|default(module.description, true) }}</p>
+  <dl class="instrument-spec">
+    <div>
+      <dt>输入</dt>
+      <dd>{{ module.inputs|default("—", true) }}</dd>
+    </div>
+    <div>
+      <dt>软件</dt>
+      <dd>{{ (module.software|default([], true))|join(" · ") or "—" }}</dd>
+    </div>
+    <div>
+      <dt>最近一次运行</dt>
+      <dd>
+        {% if module.last_used_at %}
+        <time class="local-time" datetime="{{ module.last_used_at }}" data-timestamp="{{ module.last_used_at }}">{{ module.last_used_at }}</time>
+        {% else %}
+        尚未运行
+        {% endif %}
+      </dd>
+    </div>
+    <div>
+      <dt>本账号</dt>
+      <dd class="instrument-state{% if module.state_label == '空闲' %} is-idle{% else %} is-busy{% endif %}">{{ module.state_label }}</dd>
+    </div>
+  </dl>
+  <div class="instrument-action">
+    <span>进入工作台</span><b aria-hidden="true">→</b>
+  </div>
+</a>

@@ -1,3 +1,4 @@
+import errno
 import hashlib
 import io
 import json
@@ -12,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid
 from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
@@ -26,6 +28,7 @@ import run_pipeline
 from scripts.common import cpu_share
 from scripts.stage_record import StageRecord
 from web.app import SCHEMA, create_app, elapsed_seconds, format_duration
+from web.errors import explain_job_failure
 from web.worker import process_next_job, stop_process_group
 
 
@@ -114,9 +117,18 @@ class WebWorkbenchTests(unittest.TestCase):
         self.assertIn(host["disk"]["total"].encode(), overview.data)
         module_page = self.client.get("/modules")
         self.assertIn("微生物 NGS".encode(), module_page.data)
-        self.assertIn("可用分析模块".encode(), module_page.data)
+        self.assertIn("模块目录".encode(), module_page.data)
+        self.assertIn("基因组分析".encode(), module_page.data)
         self.assertIn("细菌基因组组装".encode(), module_page.data)
+        self.assertIn("模块版本 1.0".encode(), module_page.data)
+        self.assertIn("Illumina 双端 FASTQ".encode(), module_page.data)
+        self.assertIn("Shovill/SKESA".encode(), module_page.data)
+        self.assertIn("已启用".encode(), module_page.data)
+        self.assertIn("尚未运行".encode(), module_page.data)
+        self.assertIn("空闲".encode(), module_page.data)
         self.assertIn(b'href="/"', module_page.data)
+        self.assertNotIn(b"Planned", module_page.data)
+        self.assertNotIn(b"Genome Annotation", module_page.data)
         dashboard = self.client.get("/")
         self.assertIn(b'id="upload-progress"', dashboard.data)
         self.assertIn("R1 / R2 文件上传进度".encode(), dashboard.data)
@@ -325,6 +337,35 @@ class WebWorkbenchTests(unittest.TestCase):
         self.assertIn("后续分析模块".encode(), page.data)
         module_page = self.client.get("/modules")
         self.assertIn("后续分析模块".encode(), module_page.data)
+        self.assertIn("基因组分析".encode(), module_page.data)
+        self.assertNotIn("后续分析模块".encode(), module_page.data.split("基因组分析".encode(), 1)[0])
+
+    def test_module_directory_scopes_running_state_to_the_current_user(self):
+        token = self.login(self.client)
+        response = self.submit_job(self.client, token, ("spades",))
+        job_id = response.json["job"]["id"]
+        with closing(sqlite3.connect(self.app.config["DATABASE"])) as db:
+            db.execute(
+                "UPDATE jobs SET status = 'running', started_at = created_at WHERE id = ?",
+                (job_id,),
+            )
+            db.commit()
+
+        page = self.client.get("/modules")
+        text = page.get_data(as_text=True)
+        self.assertIn("分析中 1", text)
+        self.assertIn("已启用", text)
+        self.assertNotIn("尚未运行", text)
+        self.assertNotIn("空闲", text)
+        self.assertNotIn("isolate_17", text)
+
+        bob = self.app.test_client()
+        self.login(bob, "bob", "bob-password")
+        bob_page = bob.get("/modules").get_data(as_text=True)
+        self.assertIn("尚未运行", bob_page)
+        self.assertIn("空闲", bob_page)
+        self.assertNotIn("分析中", bob_page)
+        self.assertNotIn("isolate_17", bob_page)
 
     def test_short_secret_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "at least 32 characters"):
@@ -1091,6 +1132,482 @@ class WebWorkbenchTests(unittest.TestCase):
             columns = {record[1] for record in db.execute("PRAGMA table_info(jobs)")}
         self.assertEqual(row, ("cancelled", 0))
         self.assertIn("worker_pid", columns)
+
+    def test_notices_follow_the_job_owner_through_worker_transitions(self):
+        token = self.login(self.client)
+        created = self.submit_job(self.client, token)
+        self.assertEqual(created.status_code, 202, created.get_json())
+        job_id = created.json["job"]["id"]
+        own = self.client.get("/api/notices").json
+        submitted = [item for item in own["notices"] if item["kind"] == "submitted"]
+        self.assertEqual([item["job_id"] for item in submitted], [job_id])
+        self.assertIn("/jobs/{}".format(job_id), submitted[0]["href"])
+        self.assertGreaterEqual(own["unread"], 1)
+        page = self.client.get("/")
+        self.assertIn("实验室通知".encode(), page.data)
+
+        bob = self.app.test_client()
+        self.login(bob, "bob", "bob-password")
+        self.assertEqual(bob.get("/api/notices").json["notices"], [])
+
+        self.assertTrue(process_next_job(self.app))
+        kinds = {
+            item["kind"]
+            for item in self.client.get("/api/notices").json["notices"]
+            if item["job_id"] == job_id
+        }
+        self.assertIn("running", kinds)
+        self.assertIn("succeeded", kinds)
+        self.assertEqual(bob.get("/api/notices").json["notices"], [])
+
+        self.pipeline.write_text("raise SystemExit(1)\n", encoding="utf-8")
+        failed = self.submit_job(self.client, token, ("spades",))
+        self.assertEqual(failed.status_code, 202, failed.get_json())
+        failed_id = failed.json["job"]["id"]
+        self.assertTrue(process_next_job(self.app))
+        failed_kinds = [
+            item["kind"]
+            for item in self.client.get("/api/notices").json["notices"]
+            if item["job_id"] == failed_id
+        ]
+        self.assertIn("running", failed_kinds)
+        self.assertIn("failed", failed_kinds)
+        failed_job = self.client.get("/api/jobs/{}".format(failed_id)).json["job"]
+        self.assertIn("软件运行错误", failed_job["error"])
+        self.assertNotIn(failed_id, json.dumps(bob.get("/api/notices").json))
+
+        marked = self.client.post("/api/notices/read", headers={"X-CSRF-Token": token})
+        self.assertEqual(marked.status_code, 200)
+        self.assertEqual(self.client.get("/api/notices").json["unread"], 0)
+        self.assertEqual(bob.get("/api/notices").json["unread"], 0)
+
+    def test_summary_failure_is_reported_as_a_report_error(self):
+        self.pipeline.write_text(
+            "import json, pathlib, sys\n"
+            "args = sys.argv\n"
+            "out = pathlib.Path(args[args.index('--outdir') + 1])\n"
+            "out.mkdir(parents=True, exist_ok=True)\n"
+            "(out / 'stages.json').write_text(json.dumps({'stages': ["
+            "{'id': 'spades', 'kind': 'assembly', 'state': 'done'},"
+            "{'id': 'comparison', 'kind': 'comparison', 'state': 'failed'}"
+            "]}), encoding='utf-8')\n"
+            "raise SystemExit(1)\n",
+            encoding="utf-8",
+        )
+        token = self.login(self.client)
+        response = self.submit_job(self.client, token, ("spades",))
+        job_id = response.json["job"]["id"]
+        self.assertTrue(process_next_job(self.app))
+        job = self.client.get("/api/jobs/{}".format(job_id)).json["job"]
+        self.assertEqual(job["status"], "failed")
+        self.assertIn("报告生成错误", job["error"])
+        log = self.client.get("/api/jobs/{}/log".format(job_id)).json["text"]
+        self.assertIn("WEB WORKER ERROR", log)
+        self.assertNotIn("Traceback", job["error"])
+
+    def test_disk_full_upload_returns_disk_message(self):
+        token = self.login(self.client)
+        enospc = OSError(errno.ENOSPC, "No space left on device")
+        with patch("web.app.Path.mkdir", autospec=True, side_effect=enospc):
+            response = self.submit_job(self.client, token, ("spades",))
+        self.assertEqual(response.status_code, 507)
+        body = response.get_json()
+        self.assertEqual(body["code"], "disk_full")
+        self.assertIn("磁盘不足", body["message"])
+        self.assertNotIn("Internal Server Error", response.get_data(as_text=True))
+        notices = self.client.get("/api/notices").json["notices"]
+        self.assertTrue(any(item["kind"] == "disk" for item in notices))
+
+    def test_invalid_kmer_returns_parameter_message(self):
+        token = self.login(self.client)
+        response = self.client.post(
+            "/api/jobs",
+            data={
+                "csrf_token": token,
+                "assembler": ["spades"],
+                "assembler_order": '["spades"]',
+                "sample": "isolate_17",
+                "spades_kmers": "22",
+                "r1": (io.BytesIO(b"@r1\nACGT\n+\nIIII\n"), "reads_R1.fastq"),
+                "r2": (io.BytesIO(b"@r2\nTGCA\n+\nIIII\n"), "reads_R2.fastq"),
+            },
+            headers={"X-CSRF-Token": token},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json["code"], "parameter_invalid")
+        self.assertIn("参数校验错误", response.json["message"])
+        self.assertIn("参数校验错误", response.json["error"])
+        self.assertNotIn("Internal Server Error", response.get_data(as_text=True))
+
+    def test_unreadable_cpu_returns_resource_message(self):
+        token = self.login(self.client)
+        with patch("web.app.cpu_share", side_effect=RuntimeError("could not read cpu")):
+            response = self.submit_job(self.client, token, ("spades",))
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json["code"], "resource_unavailable")
+        self.assertIn("资源不足", response.json["message"])
+        code, message = explain_job_failure(-signal.SIGKILL, None, "", [], False)
+        self.assertEqual(code, "resource_unavailable")
+        self.assertIn("资源不足", message)
+
+    def insert_owned_job(
+        self,
+        owner,
+        sample,
+        status,
+        created_at,
+        module_id="bacterial-assembly",
+        comparison=None,
+        fasta=None,
+    ):
+        job_id = str(uuid.uuid4())
+        job_dir = self.app.config["JOBS_ROOT"] / job_id
+        output = job_dir / "output"
+        inputs = job_dir / "input"
+        logs = job_dir / "logs"
+        for directory in (output, inputs, logs):
+            directory.mkdir(parents=True)
+        r1 = inputs / "R1.fastq"
+        r2 = inputs / "R2.fastq"
+        r1.write_text("@r1\nACGT\n+\nIIII\n", encoding="utf-8")
+        r2.write_text("@r2\nTGCA\n+\nIIII\n", encoding="utf-8")
+        log = logs / "job.log"
+        log.write_text("STATUS: {}\n".format(status), encoding="utf-8")
+        if comparison is not None:
+            (output / "comparison.tsv").write_text(comparison, encoding="utf-8")
+        if fasta is not None:
+            (output / "contigs.fasta").write_text(fasta, encoding="utf-8")
+        with closing(sqlite3.connect(self.app.config["DATABASE"])) as db:
+            db.execute(
+                "INSERT INTO jobs (id, owner, module_id, status, assemblers, threads, sample, "
+                "spades_kmers, spades_careful, input_r1, input_r2, output_dir, log_path, created_at) "
+                "VALUES (?, ?, ?, ?, ?, 1, ?, NULL, 1, ?, ?, ?, ?, ?)",
+                (
+                    job_id,
+                    owner,
+                    module_id,
+                    status,
+                    json.dumps(["spades"]),
+                    sample,
+                    str(r1),
+                    str(r2),
+                    str(output),
+                    str(log),
+                    created_at,
+                ),
+            )
+            db.commit()
+        return job_id
+
+    def test_history_sample_filter_stays_with_the_owner(self):
+        self.login(self.client)
+        alice_id = self.insert_owned_job(
+            "alice", "AliceVisible", "succeeded", "2026-04-01T00:00:00Z"
+        )
+        bob_id = self.insert_owned_job(
+            "bob", "ZZBobPrivate", "succeeded", "2026-04-02T00:00:00Z"
+        )
+        leaked = self.client.get("/history", query_string={"sample": "ZZBobPrivate"})
+        self.assertEqual(leaked.status_code, 200)
+        self.assertNotIn(bob_id.encode(), leaked.data)
+        self.assertNotIn(alice_id.encode(), leaked.data)
+        self.assertIn("没有符合条件的任务".encode(), leaked.data)
+        self.assertIn("放宽样本名称".encode(), leaked.data)
+        self.assertNotIn("还没有处理记录".encode(), leaked.data)
+        matched = self.client.get("/history", query_string={"sample": "AliceVisible"})
+        self.assertIn(alice_id.encode(), matched.data)
+        self.assertNotIn(bob_id.encode(), matched.data)
+        wrong_case = self.client.get("/history", query_string={"sample": "alicevisible"})
+        self.assertNotIn(alice_id.encode(), wrong_case.data)
+        self.assertIn("区分大小写".encode(), matched.data)
+        self.assertIn("样本名称".encode(), matched.data)
+
+    def test_history_status_and_date_filters(self):
+        self.login(self.client)
+        queued = self.insert_owned_job("alice", "day_queued", "queued", "2026-01-01T12:00:00Z")
+        failed = self.insert_owned_job("alice", "day_failed", "failed", "2026-01-01T23:59:59Z")
+        done = self.insert_owned_job("alice", "day_done", "succeeded", "2026-01-01T08:00:00Z")
+        later = self.insert_owned_job("alice", "later_failed", "failed", "2026-02-01T00:00:00Z")
+        cancelled = self.insert_owned_job(
+            "alice", "old_cancelled", "cancelled", "2024-05-05T00:00:00Z"
+        )
+        running = self.insert_owned_job("alice", "day_running", "running", "2026-01-01T01:00:00Z")
+        cancelling = self.insert_owned_job(
+            "alice", "day_cancelling", "cancelling", "2026-01-01T02:00:00Z"
+        )
+
+        queued_page = self.client.get("/history", query_string={"status": "queued"})
+        self.assertIn(queued.encode(), queued_page.data)
+        self.assertIn("排队中".encode(), queued_page.data)
+        self.assertNotIn(failed.encode(), queued_page.data)
+        self.assertNotIn(done.encode(), queued_page.data)
+
+        cancelled_page = self.client.get("/history", query_string={"status": "cancelled"})
+        self.assertIn(cancelled.encode(), cancelled_page.data)
+        self.assertIn("已取消".encode(), cancelled_page.data)
+        self.assertNotIn(queued.encode(), cancelled_page.data)
+
+        same_day = self.client.get(
+            "/history",
+            query_string={"status": "failed", "start": "2026-01-01", "end": "2026-01-01"},
+        )
+        self.assertIn(failed.encode(), same_day.data)
+        self.assertNotIn(later.encode(), same_day.data)
+        self.assertNotIn(done.encode(), same_day.data)
+        self.assertIn(b"<strong>1</strong>", same_day.data)
+
+        self.assertEqual(
+            self.client.get("/history", query_string={"status": "not-a-status"}).status_code,
+            400,
+        )
+        self.assertEqual(
+            self.client.get(
+                "/history", query_string={"start": "2026-03-02", "end": "2026-03-01"}
+            ).status_code,
+            400,
+        )
+        self.assertIn(
+            "日期范围不正确",
+            self.client.get("/history", query_string={"start": "2026-13-40"}).get_data(as_text=True),
+        )
+        self.assertEqual(
+            self.client.get("/history", query_string={"module": "missing-module"}).status_code,
+            400,
+        )
+        module_page = self.client.get("/history", query_string={"module": "bacterial-assembly"})
+        self.assertEqual(module_page.status_code, 200)
+        self.assertIn(done.encode(), module_page.data)
+        self.assertIn(running.encode(), module_page.data)
+        self.assertIn(cancelling.encode(), module_page.data)
+
+        for index in range(51):
+            self.insert_owned_job(
+                "alice", "batch_sample", "succeeded", "2026-06-01T00:00:{:02d}Z".format(index % 60)
+            )
+        self.insert_owned_job("alice", "other_marker", "succeeded", "2026-07-01T00:00:00Z")
+        filtered = self.client.get("/history", query_string={"sample": "batch_sample", "page": 2})
+        self.assertEqual(filtered.status_code, 200)
+        self.assertIn("共 51 条".encode(), filtered.data)
+        self.assertIn("第 2 / 2 页".encode(), filtered.data)
+        self.assertNotIn(b"other_marker", filtered.data)
+        self.assertIn(b"sample=batch_sample", filtered.data)
+
+    def test_rerun_creates_a_new_job_and_keeps_original_output(self):
+        token = self.login(self.client)
+        created = self.submit_job(self.client, token, ("spades",))
+        self.assertEqual(created.status_code, 202)
+        job_id = created.json["job"]["id"]
+        with closing(sqlite3.connect(self.app.config["DATABASE"])) as db:
+            db.execute(
+                "UPDATE jobs SET spades_kmers = '21,33', spades_careful = 1 WHERE id = ?",
+                (job_id,),
+            )
+            db.commit()
+            stored = db.execute(
+                "SELECT input_r1, input_r2, output_dir FROM jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+        original_output = Path(stored[2])
+        (original_output / "keep.txt").write_text("original-output", encoding="utf-8")
+        original_reads = Path(stored[0]).read_bytes()
+
+        rerun = self.client.post(
+            "/api/jobs/{}/rerun".format(job_id),
+            headers={"X-CSRF-Token": token, "Accept": "application/json"},
+        )
+        self.assertEqual(rerun.status_code, 202, rerun.get_data(as_text=True))
+        new_id = rerun.json["job"]["id"]
+        self.assertNotEqual(new_id, job_id)
+        self.assertEqual(rerun.json["job"]["rerun_of"], job_id)
+        self.assertEqual(rerun.json["job"]["status"], "queued")
+        with closing(sqlite3.connect(self.app.config["DATABASE"])) as db:
+            row = db.execute(
+                "SELECT rerun_of, status, sample, assemblers, spades_kmers, spades_careful, "
+                "input_r1, input_r2, output_dir FROM jobs WHERE id = ?",
+                (new_id,),
+            ).fetchone()
+        self.assertEqual(row[0], job_id)
+        self.assertEqual(row[1], "queued")
+        self.assertEqual(row[2], "isolate_17")
+        self.assertEqual(json.loads(row[3]), ["spades"])
+        self.assertEqual(row[4], "21,33")
+        self.assertEqual(row[5], 1)
+        self.assertNotEqual(row[6], stored[0])
+        self.assertEqual(Path(stored[0]).read_bytes(), original_reads)
+        self.assertEqual(Path(row[6]).read_bytes(), original_reads)
+        self.assertEqual(Path(row[7]).read_bytes(), Path(stored[1]).read_bytes())
+        self.assertEqual((original_output / "keep.txt").read_text(encoding="utf-8"), "original-output")
+        self.assertFalse((Path(row[8]) / "keep.txt").exists())
+
+        history = self.client.get("/history")
+        self.assertIn("重新分析".encode(), history.data)
+        self.assertIn("原任务 {}".format(job_id[:8]).encode(), history.data)
+        self.assertIn("新任务 {}".format(new_id[:8]).encode(), history.data)
+        self.assertIn("/jobs/{}".format(job_id).encode(), history.data)
+
+        Path(stored[0]).unlink()
+        denied = self.client.post(
+            "/api/jobs/{}/rerun".format(job_id),
+            headers={"X-CSRF-Token": token, "Accept": "application/json"},
+        )
+        self.assertEqual(denied.status_code, 409)
+        self.assertIn("重新分析", denied.json["error"])
+        with closing(sqlite3.connect(self.app.config["DATABASE"])) as db:
+            count = db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        self.assertEqual(count, 2)
+        self.assertEqual((original_output / "keep.txt").read_text(encoding="utf-8"), "original-output")
+
+        data_root = self.root / "rerun-column"
+        data_root.mkdir()
+        legacy = data_root / "jobs.sqlite3"
+        legacy_schema = SCHEMA.replace("    rerun_of TEXT,\n", "")
+        self.assertNotIn("rerun_of", legacy_schema)
+        with closing(sqlite3.connect(legacy)) as db:
+            db.executescript(legacy_schema)
+            db.execute(
+                "INSERT INTO jobs (id, owner, module_id, status, assemblers, threads, sample, "
+                "spades_careful, input_r1, input_r2, output_dir, log_path) "
+                "VALUES ('legacy-job', 'alice', 'bacterial-assembly', 'succeeded', '[]', 1, "
+                "'kept-sample', 0, 'r1.fastq', 'r2.fastq', 'output', 'job.log')"
+            )
+            db.commit()
+        create_app(
+            {
+                "SECRET_KEY": "test-key-not-for-production-32bytes",
+                "USERS": {"alice": generate_password_hash("alice-password", method="scrypt")},
+                "DATA_ROOT": data_root,
+                "PIPELINE_PATH": self.pipeline,
+            }
+        )
+        with closing(sqlite3.connect(data_root / "database" / "jobs.sqlite3")) as db:
+            migrated = db.execute(
+                "SELECT sample, rerun_of FROM jobs WHERE id = 'legacy-job'"
+            ).fetchone()
+        self.assertEqual(migrated, ("kept-sample", None))
+
+    def test_single_result_download_rejects_path_escape(self):
+        token = self.login(self.client)
+        job_id = self.insert_owned_job(
+            "alice",
+            "download_sample",
+            "succeeded",
+            "2026-05-01T00:00:00Z",
+            comparison="Assembler\tN50\nspades\t10\n",
+            fasta=">c1\nACGT\n",
+        )
+        output = self.app.config["JOBS_ROOT"] / job_id / "output"
+        secret = self.root / "secret.txt"
+        secret.write_text("TOPSECRET", encoding="utf-8")
+        (output / "linked.tsv").symlink_to(secret)
+
+        comparison = self.client.get(
+            "/api/jobs/{}/files".format(job_id), query_string={"name": "comparison.tsv"}
+        )
+        self.assertEqual(comparison.status_code, 200)
+        self.assertIn(b"spades\t10", comparison.data)
+        comparison.close()
+        fasta = self.client.get(
+            "/api/jobs/{}/files".format(job_id), query_string={"name": "contigs.fasta"}
+        )
+        self.assertEqual(fasta.status_code, 200)
+        self.assertIn(b">c1", fasta.data)
+        fasta.close()
+        self.assertIn(
+            "contigs.fasta".encode(),
+            self.client.get("/history").data,
+        )
+
+        for name in (
+            "../secret.txt",
+            "/etc/passwd",
+            "linked.tsv",
+            "contigs.fasta/../../secret.txt",
+            "..",
+        ):
+            escaped = self.client.get(
+                "/api/jobs/{}/files".format(job_id), query_string={"name": name}
+            )
+            self.assertEqual(escaped.status_code, 400, name)
+            self.assertNotIn(b"TOPSECRET", escaped.data)
+        missing = self.client.get(
+            "/api/jobs/{}/files".format(job_id), query_string={"name": "missing.fasta"}
+        )
+        self.assertEqual(missing.status_code, 404)
+        bob = self.app.test_client()
+        self.login(bob, "bob", "bob-password")
+        self.assertEqual(
+            bob.get(
+                "/api/jobs/{}/files".format(job_id), query_string={"name": "comparison.tsv"}
+            ).status_code,
+            404,
+        )
+
+    def test_compare_reads_real_summary_files(self):
+        self.login(self.client)
+        left = self.insert_owned_job(
+            "alice",
+            "left_sample",
+            "succeeded",
+            "2020-06-06T00:00:00Z",
+            comparison="Assembler\t# contigs\tN50\nspades\t1117\t4567\n",
+        )
+        right = self.insert_owned_job(
+            "alice",
+            "right_sample",
+            "failed",
+            "2020-06-07T00:00:00Z",
+            comparison=(
+                "Assembler\t# contigs\tN50\n"
+                "spades\t2228\t8901\n"
+                "megahit\t3339\t1357\n"
+            ),
+        )
+        bare = self.insert_owned_job(
+            "alice", "bare_sample", "succeeded", "2020-06-08T00:00:00Z"
+        )
+        queued = self.insert_owned_job(
+            "alice",
+            "queued_summary",
+            "queued",
+            "2020-06-09T00:00:00Z",
+            comparison="Assembler\t# contigs\nspades\t1\n",
+        )
+        history = self.client.get("/history")
+        self.assertIn('<option value="{}">'.format(left).encode(), history.data)
+        self.assertIn('<option value="{}">'.format(right).encode(), history.data)
+        self.assertNotIn('<option value="{}">'.format(bare).encode(), history.data)
+        self.assertNotIn('<option value="{}">'.format(queued).encode(), history.data)
+
+        compared = self.client.get("/history/compare", query_string={"left": left, "right": right})
+        self.assertEqual(compared.status_code, 200)
+        text = compared.get_data(as_text=True)
+        self.assertIn("<td>1117</td>", text)
+        self.assertIn("<td>2228</td>", text)
+        self.assertIn("<td>3339</td>", text)
+        self.assertIn("<td>4567</td>", text)
+        self.assertIn("<td>8901</td>", text)
+        self.assertIn("<td>—</td>", text)
+        self.assertNotIn("1672.5", text)
+        self.assertNotIn("<td>6734</td>", text)
+        self.assertIn("# contigs", text)
+        self.assertIn("N50", text)
+
+        missing = self.client.get("/history/compare", query_string={"left": left, "right": bare})
+        self.assertEqual(missing.status_code, 400)
+        self.assertIn("比较表", missing.get_data(as_text=True))
+        unfinished = self.client.get(
+            "/history/compare", query_string={"left": left, "right": queued}
+        )
+        self.assertEqual(unfinished.status_code, 400)
+        same = self.client.get("/history/compare", query_string={"left": left, "right": left})
+        self.assertEqual(same.status_code, 400)
+        bob = self.app.test_client()
+        self.login(bob, "bob", "bob-password")
+        self.assertEqual(
+            bob.get("/history/compare", query_string={"left": left, "right": right}).status_code,
+            404,
+        )
 
 
 if __name__ == "__main__":

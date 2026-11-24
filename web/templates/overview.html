@@ -10,6 +10,7 @@
 </head>
 <body class="workbench">
   {% include "_topbar.html" %}
+  {% from "components/status_pill.html" import status_pill %}
   <main class="dashboard overview-page">
     <section class="overview-intro" aria-labelledby="overview-title">
       <div>
@@ -82,9 +83,7 @@
               <strong>{{ job.sample }}</strong>
               <span>{{ job.module_code }} · {{ job.module_name }}</span>
             </a>
-            <span class="status-pill status-{{ job.status }}">
-              {{ {"queued": "排队中", "running": "分析中", "cancelling": "取消中", "cancelled": "已取消", "succeeded": "已完成", "failed": "失败"}.get(job.status, job.status) }}
-            </span>
+            {{ status_pill(job.status) }}
           </li>
           {% endfor %}
         </ul>

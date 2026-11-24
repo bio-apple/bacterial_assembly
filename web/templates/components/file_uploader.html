@@ -1,0 +1,49 @@
+<div class="sample-lane">
+  <label class="file-lane">
+    <span class="lane-tag">R1</span>
+    <span class="lane-content"><b>Read 1</b><small class="file-name">选择 FASTQ 文件</small></span>
+    <span class="file-pick">浏览</span>
+    <input id="r1-file" type="file" accept=".fastq,.fq,.fastq.gz,.fq.gz" required>
+  </label>
+  <div class="lane-link"><i></i><span>PAIRED</span><i></i></div>
+  <label class="file-lane">
+    <span class="lane-tag lane-tag-alt">R2</span>
+    <span class="lane-content"><b>Read 2</b><small class="file-name">选择 FASTQ 文件</small></span>
+    <span class="file-pick">浏览</span>
+    <input id="r2-file" type="file" accept=".fastq,.fq,.fastq.gz,.fq.gz" required>
+  </label>
+</div>
+<div id="upload-progress" class="read-transfer" aria-label="R1 / R2 文件上传进度">
+  <p class="eyebrow">PAIRED TRANSFER</p>
+  <div class="transfer-lane" data-lane="r1">
+    <span class="lane-tag">R1</span>
+    <div class="transfer-body">
+      <div id="r1-track" class="transfer-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="R1 上传进度">
+        <span id="r1-fill" class="transfer-fill"></span>
+      </div>
+      <div class="transfer-line">
+        <span id="r1-transfer-name" class="transfer-name">尚未选择</span>
+        <span id="r1-state" class="transfer-state state-pending">等待上传</span>
+        <strong id="r1-percent" class="transfer-percent">0%</strong>
+      </div>
+      <p id="r1-detail" class="transfer-detail">选择 FASTQ 文件</p>
+    </div>
+    <button type="button" id="r1-resume" class="transfer-resume" hidden>继续上传</button>
+  </div>
+  <div class="transfer-lane is-r2" data-lane="r2">
+    <span class="lane-tag lane-tag-alt">R2</span>
+    <div class="transfer-body">
+      <div id="r2-track" class="transfer-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="R2 上传进度">
+        <span id="r2-fill" class="transfer-fill"></span>
+      </div>
+      <div class="transfer-line">
+        <span id="r2-transfer-name" class="transfer-name">尚未选择</span>
+        <span id="r2-state" class="transfer-state state-pending">等待上传</span>
+        <strong id="r2-percent" class="transfer-percent">0%</strong>
+      </div>
+      <p id="r2-detail" class="transfer-detail">选择 FASTQ 文件</p>
+    </div>
+    <button type="button" id="r2-resume" class="transfer-resume" hidden>继续上传</button>
+  </div>
+  <p id="transfer-ready" class="transfer-ready">两份 FASTQ 都上传并校验完成后，才能运行组装。</p>
+</div>

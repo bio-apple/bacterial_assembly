@@ -1,0 +1,14 @@
+{% set JOB_STATUS_LABELS = {
+  "queued": "排队中",
+  "running": "分析中",
+  "cancelling": "取消中",
+  "cancelled": "已取消",
+  "succeeded": "已完成",
+  "failed": "失败"
+} %}
+{% macro status_pill(status, element_id="") -%}
+<span class="status-pill status-{{ status }}"{% if element_id %} id="{{ element_id }}"{% endif %}>{{ JOB_STATUS_LABELS.get(status, status) }}</span>
+{%- endmacro %}
+{% macro status_labels_script() -%}
+<script>window.JOB_STATUS_LABELS = {{ JOB_STATUS_LABELS | tojson }};</script>
+{%- endmacro %}

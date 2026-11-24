@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>请求没有完成 · 微生物 NGS 数据分析系统</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="workbench">
+  <main class="dashboard error-page">
+    <p class="eyebrow">SERVER / LOG ONLY</p>
+    <h1>这次请求没有完成</h1>
+    <p>{{ message }}</p>
+    <a class="monitor-back" href="{{ url_for('overview') }}">返回总览</a>
+  </main>
+</body>
+</html>

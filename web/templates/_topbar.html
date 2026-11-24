@@ -18,6 +18,17 @@
     </a>
   </nav>
   <div class="topbar-right">
+    <div class="notice-slip" data-notice-root>
+      <button type="button" class="notice-slip-toggle" aria-expanded="false" aria-controls="lab-notice-sheet" aria-label="实验室通知">
+        <span class="notice-slip-kicker">实验室通知</span>
+        <span class="notice-slip-line" data-notice-line>暂无任务动态</span>
+        <span class="notice-slip-count" data-notice-count hidden></span>
+        <i class="notice-dot" data-notice-dot hidden></i>
+      </button>
+      <div id="lab-notice-sheet" class="notice-sheet" role="region" aria-label="通知列表" tabindex="-1" hidden>
+        <ol data-notice-items></ol>
+      </div>
+    </div>
     <span class="system-state"><i></i> Linux 工作节点</span>
     <span class="user-tag">{{ username }}</span>
     <form method="post" action="{{ url_for('logout') }}">
@@ -26,3 +37,4 @@
     </form>
   </div>
 </header>
+<script src="{{ url_for('static', filename='notices.js') }}" defer></script>

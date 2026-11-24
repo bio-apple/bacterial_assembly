@@ -17,18 +17,12 @@
   const assemblerOrderField = document.querySelector("#assembler-order");
   const selectionOrderLabel = document.querySelector("#selection-order");
   let selected = null;
-  let logOffset = 0;
   let jobsById = new Map();
   let assemblerOrder = [];
-
-  const labels = {
-    queued: "排队中",
-    running: "分析中",
-    cancelling: "取消中",
-    cancelled: "已取消",
-    succeeded: "已完成",
-    failed: "失败",
-  };
+  const labels = window.JOB_STATUS_LABELS;
+  const logViewer = window.createLogViewer(log, {
+    getJobId: () => selected,
+  });
 
   function showMessage(text, isError = true) {
     message.textContent = text;
@@ -177,6 +171,7 @@
 
   const lanes = { r1: bindLane("r1"), r2: bindLane("r2") };
 
+  // Only client-side suffix check for the paired FASTQ uploader.
   function isFastq(name) {
     return /\.(fastq\.gz|fq\.gz|fastq|fq)$/i.test(name);
   }
@@ -500,28 +495,12 @@
   }
 
   async function refreshLog() {
-    if (!selected) return;
-    const response = await fetch(
-      `/api/jobs/${encodeURIComponent(selected)}/log?offset=${logOffset}`,
-      { credentials: "same-origin" }
-    );
-    if (!response.ok) return;
-    const data = await response.json();
-    if (data.offset < logOffset) {
-      log.textContent = "";
-      logOffset = 0;
-    }
-    if (data.text) {
-      log.textContent += data.text;
-      logOffset = data.offset;
-      log.scrollTop = log.scrollHeight;
-    }
+    await logViewer.refresh();
   }
 
   function selectJob(jobId) {
     selected = jobId;
-    logOffset = 0;
-    log.textContent = "";
+    logViewer.reset();
     const job = jobsById.get(jobId);
     if (job) renderDetail(job);
     refreshJobs();
@@ -626,8 +605,7 @@
       selectionOrderLabel.textContent = "选择顺序即执行顺序。";
       spadesOptions.hidden = true;
       selected = data.job.id;
-      logOffset = 0;
-      log.textContent = "";
+      logViewer.reset();
       await refreshJobs();
     } catch (error) {
       showMessage(error.message);

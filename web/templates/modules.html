@@ -4,8 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <title>分析模块 · 微生物 NGS 数据分析系统</title>
+  <title>模块目录 · 微生物 NGS 数据分析系统</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='modules.js') }}" defer></script>
 </head>
 <body class="workbench">
   {% include "_topbar.html" %}
@@ -14,7 +15,7 @@
       <div class="portal-copy">
         <p class="eyebrow">MICROBIAL NGS / DATA ANALYSIS</p>
         <h1 id="portal-title">微生物 NGS<br><span>数据分析系统</span></h1>
-        <p>从已启用的分析模块进入工作流程，提交样本并追踪处理结果。</p>
+        <p>模块目录只列出管理员已启用的分析模块，并按分析类别分组。从仪器卡片进入对应工作台。</p>
       </div>
       <div class="portal-signal-board" role="img" aria-label="双端测序数据进入分析模块">
         <span class="signal-caption">PAIRED-END INPUT</span>
@@ -34,40 +35,35 @@
     <section class="module-directory" aria-labelledby="directory-title">
       <div class="module-directory-heading">
         <div>
-          <p class="eyebrow">AVAILABLE WORKFLOWS</p>
-          <h2 id="directory-title">可用分析模块</h2>
+          <p class="eyebrow">MODULE DIRECTORY</p>
+          <h2 id="directory-title">模块目录</h2>
         </div>
-        <span class="module-count"><b>{{ modules|length }}</b> ACTIVE</span>
+        <span class="module-count"><b>{{ modules|length }}</b> 已启用</span>
       </div>
-      {% if modules %}
-      <div class="module-card-grid">
-        {% for module in modules %}
-        <a class="analysis-module-card" href="{{ url_for(module.endpoint) }}">
-          <div class="analysis-card-head">
-            <div class="analysis-card-mark" aria-hidden="true">
-              <span><i></i><i></i></span>
-              <b>{{ module.code }}</b>
-            </div>
-            <span class="module-ready">AVAILABLE</span>
-          </div>
-          <div class="analysis-card-copy">
-            <span class="analysis-card-id">{{ module.id }}</span>
-            <h3>{{ module.name }}</h3>
-            <p>{{ module.description|default("进入此模块配置分析任务并查看结果。") }}</p>
-          </div>
-          <div class="analysis-card-action">
-            <span>进入分析模块</span><b aria-hidden="true">→</b>
-          </div>
-        </a>
-        {% endfor %}
-      </div>
+      {% if categories %}
+      {% for category in categories %}
+      <section class="category-bench"{% if category.name %} aria-labelledby="category-{{ category.id }}"{% endif %}>
+        <div class="category-rail">
+          {% if category.name %}
+          <p class="eyebrow">CATEGORY</p>
+          <h3 id="category-{{ category.id }}">{{ category.name }}</h3>
+          {% endif %}
+          <span class="category-count">{{ category.modules|length }} 个模块</span>
+        </div>
+        <div class="instrument-stack">
+          {% for module in category.modules %}
+          {% include "components/module_card.html" %}
+          {% endfor %}
+        </div>
+      </section>
+      {% endfor %}
       {% else %}
       <div class="module-directory-empty">
         <h3>当前没有可用模块</h3>
         <p>请联系管理员配置并启用分析流程。</p>
       </div>
       {% endif %}
-      <p class="module-directory-note">此处仅显示已启用的分析流程；新模块上线后会自动出现在目录中。</p>
+      <p class="module-directory-note">管理员未启用的模块不会出现在目录中。运行状态只统计当前账号的任务。</p>
     </section>
     <footer class="page-footer"><span>MICROBIAL NGS</span><span>MODULE DIRECTORY</span><span>RESULTS ARE USER-SCOPED</span></footer>
   </main>

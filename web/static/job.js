@@ -17,22 +17,18 @@
   const log = document.querySelector("#job-log");
   const csrf = document.querySelector('meta[name="csrf-token"]').content;
 
-  const statusLabels = {
-    queued: "排队中",
-    running: "分析中",
-    cancelling: "取消中",
-    cancelled: "已取消",
-    succeeded: "已完成",
-    failed: "失败",
-  };
+  const statusLabels = window.JOB_STATUS_LABELS;
   const stateLabels = {
     waiting: "等待",
     running: "进行中",
     done: "完成",
     failed: "失败",
   };
+  const logViewer = window.createLogViewer(log, {
+    getJobId: () => jobId,
+    onUnauthorized: () => window.location.assign("/login"),
+  });
 
-  let logOffset = 0;
   let elapsedTimer = null;
   const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
     year: "numeric",
@@ -177,28 +173,15 @@
   }
 
   async function refreshLog() {
-    const response = await fetch(
-      `/api/jobs/${encodeURIComponent(jobId)}/log?offset=${logOffset}`,
-      { credentials: "same-origin" }
-    );
-    if (response.status === 401) {
-      window.location.assign("/login");
-      return;
-    }
-    if (!response.ok) return;
-    const data = await response.json();
-    if (data.offset < logOffset) {
-      log.textContent = "";
-      logOffset = 0;
-    }
-    if (data.text) {
-      log.textContent += data.text;
-      logOffset = data.offset;
-    }
+    await logViewer.refresh();
   }
 
   if (cancelButton) {
     cancelButton.addEventListener("click", async () => {
+      if (window.confirmAction) {
+        const accepted = await window.confirmAction("取消任务");
+        if (!accepted) return;
+      }
       cancelButton.disabled = true;
       const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, {
         method: "POST",
