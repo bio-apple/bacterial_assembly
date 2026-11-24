@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>细菌基因组组装 · 微生物 NGS 数据分析系统</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+</head>
+<body class="workbench">
+  {% include "_topbar.html" %}
+
+  <main class="dashboard">
+    <section class="page-intro" aria-labelledby="page-title">
+      <div class="intro-text">
+        <p class="eyebrow">ANALYSIS MODULES</p>
+        <nav class="module-nav" aria-label="分析模块">
+          {% for module in analysis_modules %}
+          <a class="module-tab{% if module.id == active_module_id %} is-active{% endif %}"
+           href="{{ url_for(module.endpoint) }}"{% if module.id == active_module_id %} aria-current="page"{% endif %}>
+            <span class="module-code">{{ module.code }}</span>
+            <span>{{ module.name }}</span>
+          </a>
+          {% endfor %}
+          <span class="module-extension" role="note">
+            <span class="module-plus" aria-hidden="true">+</span>
+            <span>新分析模块</span>
+            <small>接入后显示于此</small>
+          </span>
+        </nav>
+        <h1 id="page-title">从 reads 到 contigs</h1>
+        <p class="intro-copy">上传一对 Illumina FASTQ，选择组装器。fastp 与 QUAST 会自动运行。</p>
+      </div>
+      <figure class="workflow-map" aria-label="分析流程：双端 FASTQ、fastp 过滤、所选组装器、QUAST 评估">
+        <div class="workflow-stage workflow-input">
+          <span class="workflow-label">INPUT</span>
+          <div class="read-pair">
+            <span class="read-tag read-one">R1</span>
+            <span class="read-tag read-two">R2</span>
+          </div>
+          <strong>Paired FASTQ</strong>
+        </div>
+        <span class="workflow-connector" aria-hidden="true"></span>
+        <div class="workflow-stage">
+          <span class="workflow-label">FILTER</span>
+          <span class="workflow-symbol filter-symbol" aria-hidden="true">⌁</span>
+          <strong>fastp</strong>
+        </div>
+        <span class="workflow-connector" aria-hidden="true"></span>
+        <div class="workflow-stage">
+          <span class="workflow-label">ASSEMBLE</span>
+          <span class="workflow-symbol assembly-symbol" aria-hidden="true">Y</span>
+          <strong>Assemblers</strong>
+        </div>
+        <span class="workflow-connector" aria-hidden="true"></span>
+        <div class="workflow-stage">
+          <span class="workflow-label">ASSESS</span>
+          <span class="workflow-symbol quast-symbol" aria-hidden="true">↗</span>
+          <strong>QUAST</strong>
+        </div>
+      </figure>
+    </section>
+
+    <div class="workspace-grid">
+      <section class="panel submit-panel">
+        <div class="panel-heading">
+          <div><p class="eyebrow">NEW ANALYSIS</p><h2>准备样本</h2></div>
+          <span class="step-mark">FASTQ / PAIRED-END</span>
+        </div>
+        <form id="job-form">
+          <input type="hidden" name="assembler_order" id="assembler-order" value="[]">
+          <div class="sample-lane">
+            <label class="file-lane">
+              <span class="lane-tag">R1</span>
+              <span class="lane-content"><b>Read 1</b><small class="file-name">选择 FASTQ 文件</small></span>
+              <span class="file-pick">浏览</span>
+              <input name="r1" type="file" accept=".fastq,.fq,.fastq.gz,.fq.gz" required>
+            </label>
+            <div class="lane-link"><i></i><span>PAIRED</span><i></i></div>
+            <label class="file-lane">
+              <span class="lane-tag lane-tag-alt">R2</span>
+              <span class="lane-content"><b>Read 2</b><small class="file-name">选择 FASTQ 文件</small></span>
+              <span class="file-pick">浏览</span>
+              <input name="r2" type="file" accept=".fastq,.fq,.fastq.gz,.fq.gz" required>
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field">
+              <span>样本名称</span>
+              <input name="sample" value="isolate_01" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" required>
+            </label>
+            <p class="resource-policy">所选组装方法按选择顺序串行执行，每种方法尝试使用约 90% 的逻辑 CPU 和物理内存。样本任务仍按提交顺序排队；单个方法失败不阻止其余方法。</p>
+          </div>
+          <fieldset class="assembler-select">
+            <legend>组装器 <small>至少选择一种 · 按选择顺序运行</small></legend>
+            <div class="assembler-options">
+              {% for assembler in assemblers %}
+              <label class="assembler-option">
+                <input type="checkbox" name="assembler" value="{{ assembler }}">
+                <span class="check-box"></span><span>{{ assembler }}</span>
+              </label>
+              {% endfor %}
+            </div>
+            <p class="selection-order" id="selection-order">选择顺序即执行顺序。</p>
+          </fieldset>
+          <div id="spades-options" class="spades-options" hidden>
+            <label class="field"><span>SPAdes k-mer <small>可选，例如 21,33,55</small></span>
+              <input name="spades_kmers" placeholder="使用默认值">
+            </label>
+            <label class="toggle-option"><input name="spades_careful" type="checkbox"><span>SPAdes careful 模式</span></label>
+          </div>
+          <div class="form-footer">
+            <p>任务按提交顺序运行 · 结果仅当前账号可见</p>
+            <button class="button button-primary" id="start-button" type="submit">运行组装 <span>→</span></button>
+          </div>
+          <div id="upload-progress" class="upload-progress" hidden>
+            <div class="upload-progress-heading">
+              <span id="upload-progress-label">正在传输 R1 / R2 FASTQ</span>
+              <strong id="upload-progress-percent"></strong>
+            </div>
+            <progress id="upload-progress-bar" max="100" value="0" aria-label="R1 / R2 文件上传进度"></progress>
+            <p id="upload-progress-detail" class="upload-progress-detail"></p>
+          </div>
+          <p id="form-message" class="form-message" role="status"></p>
+        </form>
+      </section>
+
+      <aside class="queue-column">
+        <section class="panel queue-panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">YOUR QUEUE</p><h2>分析任务</h2></div>
+            <span class="queue-count" id="queue-count">0</span>
+          </div>
+          <div id="job-list" class="job-list"><p class="empty-state">还没有分析任务。提交一个 FASTQ 样本开始。</p></div>
+        </section>
+        <section class="panel detail-panel" id="job-detail">
+          <div class="panel-heading">
+            <div><p class="eyebrow">LIVE TRACE</p><h2>运行记录</h2></div>
+            <span class="status-pill status-idle" id="detail-status">等待选择</span>
+          </div>
+          <div id="detail-summary" class="detail-summary">选择一个任务查看进度与日志。</div>
+          <pre id="job-log" class="job-log" aria-live="polite"></pre>
+          <a id="download-link" class="button button-download" hidden>下载分析结果 <span>↓</span></a>
+        </section>
+      </aside>
+    </div>
+    <footer class="page-footer"><span>MICROBIAL NGS</span><span>FASTP → ASSEMBLER → QUAST</span><span>RESULTS ARE USER-SCOPED</span></footer>
+  </main>
+</body>
+</html>

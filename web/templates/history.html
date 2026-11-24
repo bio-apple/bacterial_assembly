@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>处理历史 · 微生物 NGS 数据分析系统</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='history.js') }}" defer></script>
+</head>
+<body class="workbench">
+  {% include "_topbar.html" %}
+  <main class="dashboard history-page">
+    <section class="history-intro" aria-labelledby="history-title">
+      <div>
+        <p class="eyebrow">RUN LEDGER / USER SCOPE</p>
+        <h1 id="history-title">处理历史</h1>
+        <p>按样本回看分析模块、任务状态与实际运行时间。</p>
+      </div>
+      <div class="history-total">
+        <strong>{{ total_count }}</strong>
+        <span>条样本处理记录</span>
+        <small>时间按浏览器时区显示</small>
+      </div>
+    </section>
+
+    <section class="history-panel" aria-label="样本处理记录">
+      <div class="history-columns" aria-hidden="true">
+        <span>样本 / 提交时间</span>
+        <span>分析模块</span>
+        <span>任务状态</span>
+        <span>结束时间</span>
+        <span>运行时间</span>
+      </div>
+      {% if jobs %}
+      <div class="history-list">
+        {% for job in jobs %}
+        <article class="history-entry state-{{ job.status }}">
+          <div class="history-cell history-sample" data-label="样本 / 提交时间">
+            <strong>{{ job.sample }}</strong>
+            <span class="history-job-id">任务 {{ job.id[:8] }}</span>
+            <time class="local-time" data-timestamp="{{ job.created_at }}" datetime="{{ job.created_at }}">
+              {{ job.created_at }}
+            </time>
+          </div>
+          <div class="history-cell history-module" data-label="分析模块">
+            <span class="history-module-name"><span class="module-code">{{ job.module_code }}</span>{{ job.module_name }}</span>
+            <span class="history-assemblers">
+              {% for assembler in job.assemblers %}
+              <span>{{ assembler }}</span>
+              {% endfor %}
+            </span>
+          </div>
+          <div class="history-cell history-status" data-label="任务状态">
+            <span class="status-pill status-{{ job.status }}">
+              {{ {"queued": "排队中", "running": "运行中", "succeeded": "已完成", "failed": "失败"}.get(job.status, job.status) }}
+            </span>
+            {% if job.result_available %}
+            <a class="history-result-download" href="{{ url_for('download_job', job_id=job.id) }}"
+               aria-label="下载 {{ job.sample }} 的 {{ job.module_name }} 输出结果">
+              {% if job.status == "failed" %}下载部分结果{% else %}下载输出结果{% endif %}
+              <span aria-hidden="true">↓</span>
+            </a>
+            {% elif job.status in ("queued", "running") %}
+            <span class="history-result-pending">完成后可下载</span>
+            {% else %}
+            <span class="history-result-pending">无可下载结果</span>
+            {% endif %}
+            {% if job.log_available %}
+            <a class="history-log-download" href="{{ url_for('download_job_log', job_id=job.id) }}"
+               aria-label="下载 {{ job.sample }} 的 {{ job.module_name }} 运行日志">
+              下载运行日志 <span aria-hidden="true">↓</span>
+            </a>
+            {% else %}
+            <span class="history-log-pending">日志准备中</span>
+            {% endif %}
+          </div>
+          <div class="history-cell history-ended" data-label="结束时间">
+            {% if job.completed_at %}
+            <time class="local-time" data-timestamp="{{ job.completed_at }}" datetime="{{ job.completed_at }}">
+              {{ job.completed_at }}
+            </time>
+            {% elif job.status == "running" %}
+            <span>运行中</span>
+            {% else %}
+            <span>—</span>
+            {% endif %}
+          </div>
+          <div class="history-cell history-runtime" data-label="运行时间">
+            {% if job.status == "running" and job.runtime_seconds is not none %}
+            <span class="runtime-value" data-live-duration data-elapsed-seconds="{{ job.runtime_seconds }}">
+              {{ job.runtime_label }}
+            </span>
+            {% else %}
+            <span class="runtime-value">{{ job.runtime_label }}</span>
+            {% endif %}
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="history-empty">
+        <span class="history-empty-mark" aria-hidden="true">∅</span>
+        <h2>还没有处理记录</h2>
+        <p>提交一个样本后，分析模块、状态和运行时间会显示在这里。</p>
+        <a class="button button-primary" href="{{ url_for('dashboard') }}">前往分析工作台 <span>→</span></a>
+      </div>
+      {% endif %}
+    </section>
+
+    {% if total_pages > 1 %}
+    <nav class="history-pagination" aria-label="历史记录分页">
+      <span>第 {{ page }} / {{ total_pages }} 页 · 共 {{ total_count }} 条</span>
+      <div>
+        {% if page > 1 %}
+        <a href="{{ url_for('job_history', page=page - 1) }}">← 上一页</a>
+        {% endif %}
+        {% if page < total_pages %}
+        <a href="{{ url_for('job_history', page=page + 1) }}">下一页 →</a>
+        {% endif %}
+      </div>
+    </nav>
+    {% endif %}
+    <footer class="page-footer"><span>MICROBIAL NGS</span><span>RUN HISTORY</span><span>RESULTS ARE USER-SCOPED</span></footer>
+  </main>
+</body>
+</html>

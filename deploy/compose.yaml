@@ -1,0 +1,51 @@
+services:
+  web:
+    build:
+      context: ..
+    image: bacterial-assembly:latest
+    entrypoint: ["micromamba", "run", "-n", "base"]
+    command:
+      - gunicorn
+      - --workers
+      - "2"
+      - --timeout
+      - "3600"
+      - --bind
+      - 0.0.0.0:8000
+      - --access-logfile
+      - "-"
+      - --error-logfile
+      - "-"
+      - web.app:app
+    working_dir: /opt/bacterial-assembly
+    environment:
+      ASSEMBLY_WEB_SECRET: ${ASSEMBLY_WEB_SECRET:?Set a unique random secret in deploy/.env}
+      ASSEMBLY_USERS_FILE: /config/users.json
+      ASSEMBLY_DATA_ROOT: /data
+      TMPDIR: /data/tmp
+      PYTHONPATH: /opt/bacterial-assembly
+    volumes:
+      - ./data:/data
+      - ./users.json:/config/users.json:ro
+    ports:
+      - 127.0.0.1:8000:8000
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    restart: unless-stopped
+
+  worker:
+    image: bacterial-assembly:latest
+    entrypoint: ["micromamba", "run", "-n", "base"]
+    command: ["python", "-m", "web.worker"]
+    working_dir: /opt/bacterial-assembly
+    environment:
+      ASSEMBLY_WEB_SECRET: ${ASSEMBLY_WEB_SECRET:?Set a unique random secret in deploy/.env}
+      ASSEMBLY_USERS_FILE: /config/users.json
+      ASSEMBLY_DATA_ROOT: /data
+      TMPDIR: /data/tmp
+      PYTHONPATH: /opt/bacterial-assembly
+    volumes:
+      - ./data:/data
+      - ./users.json:/config/users.json:ro
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    restart: unless-stopped
+    init: true

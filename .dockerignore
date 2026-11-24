@@ -1,0 +1,13 @@
+.git
+.DS_Store
+__pycache__
+*.py[cod]
+tests
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+results
+deploy/.env
+deploy/users.json
+deploy/data

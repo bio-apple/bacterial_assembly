@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 · 微生物 NGS 数据分析系统</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='login.js') }}" defer></script>
+</head>
+<body class="login-page">
+  <main class="login-shell">
+    <a class="brand login-brand" href="/login" aria-label="微生物 NGS 数据分析系统">
+      <span class="brand-icon" aria-hidden="true">MN<i></i></span>
+      <span>MICROBIAL <b>NGS</b></span>
+    </a>
+    <p class="eyebrow">MICROBIAL NGS / DATA ANALYSIS</p>
+    <h1>微生物 NGS，<br>数据分析系统。</h1>
+    <p class="login-copy">登录后选择已启用的分析模块，提交样本并跟踪处理结果。</p>
+    <form class="login-form" method="post" action="{{ url_for('login_post') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="username">账号</label>
+      <input id="username" name="username" autocomplete="username" required autofocus>
+      <label for="password">密码</label>
+      <div class="password-field">
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <button id="toggle-password" class="password-toggle" type="button" aria-controls="password"
+                aria-label="显示密码" aria-pressed="false">显示</button>
+      </div>
+      {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+      <button class="button button-primary" type="submit">登录工作台 <span>↗</span></button>
+    </form>
+    <p class="login-foot">仅限管理员预先配置的实验室账号</p>
+  </main>
+  <div class="login-aside" aria-hidden="true">
+    <div class="login-figure">
+      <p class="eyebrow">MICROBIAL NGS WORKFLOWS</p>
+      <div class="login-read-path">
+        <span>R1</span><i></i><b></b>
+      </div>
+      <div class="login-read-path login-read-path-alt">
+        <span>R2</span><i></i><b></b>
+      </div>
+      <div class="login-flow">
+        <span>READS</span><i></i><span>MODULE</span><i></i><span>RESULTS</span>
+      </div>
+      <p>Paired reads enter<br><strong>purpose-built analysis.</strong></p>
+    </div>
+  </div>
+</body>
+</html>

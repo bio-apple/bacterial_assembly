@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>分析模块 · 微生物 NGS 数据分析系统</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="workbench">
+  {% include "_topbar.html" %}
+  <main class="dashboard module-portal">
+    <section class="module-portal-intro" aria-labelledby="portal-title">
+      <div class="portal-copy">
+        <p class="eyebrow">MICROBIAL NGS / DATA ANALYSIS</p>
+        <h1 id="portal-title">微生物 NGS<br><span>数据分析系统</span></h1>
+        <p>从已启用的分析模块进入工作流程，提交样本并追踪处理结果。</p>
+      </div>
+      <div class="portal-signal-board" role="img" aria-label="双端测序数据进入分析模块">
+        <span class="signal-caption">PAIRED-END INPUT</span>
+        <div class="signal-reads">
+          <span>R1</span><i></i><b></b>
+          <span>R2</span><i></i><b></b>
+        </div>
+        <div class="signal-trunk" aria-hidden="true"></div>
+        <span class="signal-hub">NGS</span>
+        <div class="signal-outputs">
+          <span>{{ modules|length }} MODULE{% if modules|length != 1 %}S{% endif %}</span>
+        </div>
+        <span class="signal-foot">READS <i>→</i> MODULES</span>
+      </div>
+    </section>
+
+    <section class="module-directory" aria-labelledby="directory-title">
+      <div class="module-directory-heading">
+        <div>
+          <p class="eyebrow">AVAILABLE WORKFLOWS</p>
+          <h2 id="directory-title">可用分析模块</h2>
+        </div>
+        <span class="module-count"><b>{{ modules|length }}</b> ACTIVE</span>
+      </div>
+      {% if modules %}
+      <div class="module-card-grid">
+        {% for module in modules %}
+        <a class="analysis-module-card" href="{{ url_for(module.endpoint) }}">
+          <div class="analysis-card-head">
+            <div class="analysis-card-mark" aria-hidden="true">
+              <span><i></i><i></i></span>
+              <b>{{ module.code }}</b>
+            </div>
+            <span class="module-ready">AVAILABLE</span>
+          </div>
+          <div class="analysis-card-copy">
+            <span class="analysis-card-id">{{ module.id }}</span>
+            <h3>{{ module.name }}</h3>
+            <p>{{ module.description|default("进入此模块配置分析任务并查看结果。") }}</p>
+          </div>
+          <div class="analysis-card-action">
+            <span>进入分析模块</span><b aria-hidden="true">→</b>
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="module-directory-empty">
+        <h3>当前没有可用模块</h3>
+        <p>请联系管理员配置并启用分析流程。</p>
+      </div>
+      {% endif %}
+      <p class="module-directory-note">此处仅显示已启用的分析流程；新模块上线后会自动出现在目录中。</p>
+    </section>
+    <footer class="page-footer"><span>MICROBIAL NGS</span><span>MODULE DIRECTORY</span><span>RESULTS ARE USER-SCOPED</span></footer>
+  </main>
+</body>
+</html>
