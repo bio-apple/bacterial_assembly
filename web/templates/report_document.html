@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ report.sample_name }} · 分析报告</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="workbench">
+  <main class="dashboard monitor-page">
+    <p class="eyebrow">ASSEMBLY REPORT</p>
+    <h1>{{ report.sample_name }}</h1>
+    <p class="monitor-sample">{{ report.status_label }} · HTML 报告。PDF 未提供。</p>
+    {% include "report_body.html" %}
+  </main>
+</body>
+</html>

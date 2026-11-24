@@ -592,6 +592,17 @@
         body,
       });
       showMessage("任务已加入串行队列。", false);
+      const submittedSample = form.sample.value;
+      const knownSamples = document.querySelector("#known-samples");
+      if (
+        knownSamples
+        && submittedSample
+        && ![...knownSamples.options].some((option) => option.value === submittedSample)
+      ) {
+        const option = document.createElement("option");
+        option.value = submittedSample;
+        knownSamples.append(option);
+      }
       for (const lane of Object.values(lanes)) {
         if (lane.file) sessionStorage.removeItem(storageKey(lane.role, lane.file));
         lane.input.closest(".file-lane").querySelector(".file-name").textContent = "选择 FASTQ 文件";

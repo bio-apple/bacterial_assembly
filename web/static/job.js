@@ -157,6 +157,160 @@
     }
     renderRail(progress.groups || []);
     bindElapsed(job);
+    if (job.detail) {
+      renderResources(job.detail.resources);
+      renderComparison(job.detail.comparison);
+      renderReports(job.detail.report_ready);
+      refreshHost(job.status);
+    }
+  }
+
+  function renderResources(resources) {
+    const threads = document.querySelector("#assigned-threads");
+    const memory = document.querySelector("#assigned-memory");
+    if (!resources || !threads || !memory) return;
+    threads.textContent = resources.threads_text || "";
+    memory.textContent = resources.memory_text || "";
+  }
+
+  function append(parent, tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    parent.append(node);
+    return node;
+  }
+
+  function renderComparison(comparison) {
+    const section = document.querySelector("#assembly-comparison");
+    if (!section || !comparison) return;
+    section.replaceChildren();
+    const head = append(section, "div", "monitor-section-head");
+    append(head, "h2", "", "组装器比较").id = "comparison-title";
+    append(head, "p", "", "只列出这次选择的组装器。数字来自 comparison.tsv。");
+    if (!comparison.ready) {
+      append(section, "p", "report-note", comparison.message || "比较尚未就绪。").id = "comparison-waiting";
+    } else {
+      const scroll = append(section, "div", "compare-scroll");
+      const table = append(scroll, "table", "compare-table metric-sheet");
+      const thead = append(table, "thead");
+      const header = append(thead, "tr");
+      append(header, "th", "", "指标").scope = "col";
+      for (const column of comparison.columns || []) {
+        append(header, "th", "", column.label || column.id || "").scope = "col";
+      }
+      const body = append(table, "tbody");
+      for (const metric of comparison.metrics || []) {
+        const row = append(body, "tr");
+        append(row, "th", "", metric.name || "").scope = "row";
+        for (const cell of metric.cells || []) append(row, "td", "", cell.text || "");
+      }
+      append(
+        table,
+        "caption",
+        "",
+        "指标名称与 comparison.tsv 的列一致。某个所选组装器没有对应行时，记为无记录。",
+      );
+      if ((comparison.missing_labels || []).length) {
+        append(
+          section,
+          "p",
+          "assembly-missing",
+          `这次选择了、但比较表里没有记录：${comparison.missing_labels.join("、")}。`,
+        );
+      }
+      if ((comparison.extra_labels || []).length) {
+        append(
+          section,
+          "p",
+          "assembly-missing",
+          `比较表里还有这次没有选择的组装器：${comparison.extra_labels.join("、")}。未列入上表。`,
+        );
+      }
+      append(section, "p", "compare-rule", comparison.rule || "不要仅根据 N50 自动推荐最佳组装结果。");
+      const charts = append(section, "div", "metric-charts");
+      for (const chart of comparison.charts || []) {
+        const figure = append(charts, "figure", "metric-chart");
+        append(figure, "figcaption", "", chart.title || "");
+        if ((chart.bars || []).length) {
+          const bars = append(figure, "div", "metric-bars");
+          for (const bar of chart.bars) {
+            const line = append(bars, "div", "metric-bar-row");
+            append(line, "span", "metric-bar-name", bar.label || "");
+            const track = append(line, "span", "metric-bar-track");
+            track.setAttribute("aria-hidden", "true");
+            const fill = append(track, "span", "metric-bar-fill");
+            const width = Number(bar.width);
+            if (Number.isFinite(width) && width >= 0 && width <= 100) {
+              fill.style.width = `${width}%`;
+            }
+            append(line, "span", "metric-bar-value", bar.text || "");
+          }
+        } else {
+          append(figure, "p", "report-note", chart.empty || "这项指标没有可绘制的数值。");
+        }
+      }
+    }
+    if (!comparison.ready) {
+      append(section, "p", "compare-rule", comparison.rule || "不要仅根据 N50 自动推荐最佳组装结果。");
+    }
+  }
+
+  function renderReports(ready) {
+    const readyNode = document.querySelector("[data-report-ready]");
+    const waitingNode = document.querySelector("[data-report-waiting]");
+    if (readyNode) readyNode.hidden = !ready;
+    if (waitingNode) waitingNode.hidden = Boolean(ready);
+  }
+
+  function formatHostCpu(metric) {
+    if (!metric || metric.ok !== true || typeof metric.percent !== "number") return "未能读取";
+    return typeof metric.cores === "number" ? `${metric.percent}% · ${metric.cores} 核` : `${metric.percent}%`;
+  }
+
+  function formatHostMemory(metric) {
+    if (!metric || metric.ok !== true || typeof metric.percent !== "number") return "未能读取";
+    if (typeof metric.used === "string" && typeof metric.total === "string") {
+      return `${metric.percent}% · ${metric.used} / ${metric.total}`;
+    }
+    return `${metric.percent}%`;
+  }
+
+  async function refreshHost(status) {
+    const note = document.querySelector("#host-usage-note");
+    const metrics = document.querySelector("#host-usage-metrics");
+    const cpu = document.querySelector("#host-cpu");
+    const memory = document.querySelector("#host-memory");
+    if (!note || !metrics || !cpu || !memory) return;
+    const hostBlock = document.querySelector("#host-usage");
+    const live = status === "running" || status === "cancelling";
+    if (!live) {
+      if (hostBlock) hostBlock.hidden = true;
+      metrics.hidden = true;
+      cpu.textContent = "";
+      memory.textContent = "";
+      return;
+    }
+    if (hostBlock) hostBlock.hidden = false;
+    note.textContent = "此刻这台机器的占用，不是本任务的历史曲线。";
+    try {
+      const response = await fetch("/api/host", { credentials: "same-origin" });
+      if (response.status === 401) {
+        window.location.assign("/login");
+        return;
+      }
+      if (!response.ok) throw new Error("host");
+      const data = await response.json();
+      const host = data.host || {};
+      cpu.textContent = formatHostCpu(host.cpu);
+      memory.textContent = formatHostMemory(host.memory);
+      metrics.hidden = false;
+    } catch (error) {
+      cpu.textContent = "";
+      memory.textContent = "";
+      metrics.hidden = true;
+      note.textContent = "当前主机占用未能读取。";
+    }
   }
 
   async function refreshJob() {
@@ -174,6 +328,34 @@
 
   async function refreshLog() {
     await logViewer.refresh();
+  }
+
+  const rerunButton = document.querySelector("#rerun-job");
+  const rerunError = document.querySelector("#rerun-error");
+  if (rerunButton) {
+    rerunButton.addEventListener("click", async () => {
+      if (window.confirmAction) {
+        const accepted = await window.confirmAction("重新分析");
+        if (!accepted) return;
+      }
+      rerunButton.disabled = true;
+      const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/rerun`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": csrf, Accept: "application/json" },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        window.location.assign("/login");
+        return;
+      }
+      if (!response.ok || !payload.job) {
+        rerunButton.disabled = false;
+        if (rerunError) rerunError.textContent = payload.error || "不能重新分析。";
+        return;
+      }
+      window.location.assign(`/jobs/${encodeURIComponent(payload.job.id)}`);
+    });
   }
 
   if (cancelButton) {

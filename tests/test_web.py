@@ -1609,6 +1609,291 @@ class WebWorkbenchTests(unittest.TestCase):
             404,
         )
 
+    def test_sample_batch_comparison_and_report_stay_with_the_owner(self):
+        token = self.login(self.client)
+        first = self.submit_job(self.client, token, ("spades",))
+        second = self.client.post(
+            "/api/jobs",
+            data={
+                "csrf_token": token,
+                "assembler_order": '["megahit"]',
+                "assembler": ["megahit"],
+                "sample": "isolate_17",
+                "r1": (io.BytesIO(b"@r1\nACGT\n+\nIIII\n"), "reads_R1.fastq.gz"),
+                "r2": (io.BytesIO(b"@r2\nTGCA\n+\nIIII\n"), "reads_R2.fastq.gz"),
+            },
+            headers={"X-CSRF-Token": token},
+            content_type="multipart/form-data",
+        )
+        unique = self.client.post(
+            "/api/jobs",
+            data={
+                "csrf_token": token,
+                "assembler_order": '["spades"]',
+                "assembler": ["spades"],
+                "sample": "alice_only_strain",
+                "r1": (io.BytesIO(b"@r1\nACGT\n+\nIIII\n"), "reads_R1.fastq.gz"),
+                "r2": (io.BytesIO(b"@r2\nTGCA\n+\nIIII\n"), "reads_R2.fastq.gz"),
+            },
+            headers={"X-CSRF-Token": token},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 202, second.get_data(as_text=True))
+        self.assertEqual(unique.status_code, 202, unique.get_data(as_text=True))
+        first_id = first.json["job"]["id"]
+        second_id = second.json["job"]["id"]
+        with closing(sqlite3.connect(self.app.config["DATABASE"])) as db:
+            links = db.execute(
+                "SELECT id, sample_id, sequencing_batch_id FROM jobs WHERE id IN (?, ?)",
+                (first_id, second_id),
+            ).fetchall()
+            batches = db.execute(
+                "SELECT id, r1_filename, r1_sha256 FROM sequencing_batches WHERE owner = ?",
+                ("alice",),
+            ).fetchall()
+        by_id = {row[0]: row for row in links}
+        self.assertEqual(by_id[first_id][1], by_id[second_id][1])
+        self.assertNotEqual(by_id[first_id][2], by_id[second_id][2])
+        self.assertIn(("reads_R1.fastq.gz", None), [(row[1], row[2]) for row in batches])
+        alice_page = self.client.get("/")
+        self.assertIn(b'value="alice_only_strain"', alice_page.data)
+        self.assertIn(b'value="isolate_17"', alice_page.data)
+
+        left = b"@r1\nACGTACGT\n+\nIIIIIIII\n"
+        right = b"@r2\nTGCAAAAA\n+\nIIIIIIII\n"
+        r1 = self.store_chunks(self.client, token, "lane_R1.fastq", "r1", left)
+        r2 = self.store_chunks(self.client, token, "lane_R2.fastq", "r2", right)
+        self.assertEqual(
+            self.finish_upload(self.client, token, r1["id"], hashlib.sha256(left).hexdigest()).status_code,
+            200,
+        )
+        self.assertEqual(
+            self.finish_upload(self.client, token, r2["id"], hashlib.sha256(right).hexdigest()).status_code,
+            200,
+        )
+        hashed = self.client.post(
+            "/api/jobs",
+            data={
+                "assembler": ["spades"],
+                "assembler_order": '["spades"]',
+                "sample": "sha_strain",
+                "r1_session": r1["id"],
+                "r2_session": r2["id"],
+            },
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(hashed.status_code, 202, hashed.get_data(as_text=True))
+        with closing(sqlite3.connect(self.app.config["DATABASE"])) as db:
+            stored_batch = db.execute(
+                "SELECT r1_filename, r2_filename, r1_sha256, r2_sha256 FROM sequencing_batches "
+                "WHERE owner = 'alice' AND r1_filename = 'lane_R1.fastq'"
+            ).fetchone()
+        self.assertEqual(stored_batch[0], "lane_R1.fastq")
+        self.assertEqual(stored_batch[1], "lane_R2.fastq")
+        self.assertEqual(stored_batch[2], hashlib.sha256(left).hexdigest())
+        self.assertEqual(stored_batch[3], hashlib.sha256(right).hexdigest())
+
+        with closing(sqlite3.connect(self.app.config["DATABASE"])) as db:
+            output = Path(
+                db.execute("SELECT output_dir FROM jobs WHERE id = ?", (first_id,)).fetchone()[0]
+            )
+        (output / "keep.txt").write_text("original-output", encoding="utf-8")
+        rerun = self.client.post(
+            "/api/jobs/{}/rerun".format(first_id),
+            headers={"X-CSRF-Token": token, "Accept": "application/json"},
+        )
+        self.assertEqual(rerun.status_code, 202, rerun.get_data(as_text=True))
+        rerun_id = rerun.json["job"]["id"]
+        with closing(sqlite3.connect(self.app.config["DATABASE"])) as db:
+            rerun_row = db.execute(
+                "SELECT sample_id, sequencing_batch_id, output_dir FROM jobs WHERE id = ?",
+                (rerun_id,),
+            ).fetchone()
+            batch_count = db.execute(
+                "SELECT COUNT(*) FROM sequencing_batches WHERE sample_id = ?",
+                (by_id[first_id][1],),
+            ).fetchone()[0]
+        self.assertEqual(rerun_row[0], by_id[first_id][1])
+        self.assertEqual(rerun_row[1], by_id[first_id][2])
+        self.assertNotEqual(rerun_row[2], str(output))
+        self.assertEqual((output / "keep.txt").read_text(encoding="utf-8"), "original-output")
+        self.assertFalse((Path(rerun_row[2]) / "keep.txt").exists())
+        self.assertEqual(batch_count, 2)
+
+        bob = self.app.test_client()
+        bob_token = self.login(bob, "bob", "bob-password")
+        bob_job = bob.post(
+            "/api/jobs",
+            data={
+                "csrf_token": bob_token,
+                "assembler_order": '["spades"]',
+                "assembler": ["spades"],
+                "sample": "isolate_17",
+                "r1": (io.BytesIO(b"@r1\nACGT\n+\nIIII\n"), "reads_R1.fastq.gz"),
+                "r2": (io.BytesIO(b"@r2\nTGCA\n+\nIIII\n"), "reads_R2.fastq.gz"),
+            },
+            headers={"X-CSRF-Token": bob_token},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(bob_job.status_code, 202, bob_job.get_data(as_text=True))
+        with closing(sqlite3.connect(self.app.config["DATABASE"])) as db:
+            owners = db.execute(
+                "SELECT owner, id FROM samples WHERE name = 'isolate_17' ORDER BY owner"
+            ).fetchall()
+        self.assertEqual([row[0] for row in owners], ["alice", "bob"])
+        self.assertNotEqual(owners[0][1], owners[1][1])
+        self.assertNotIn(b"alice_only_strain", bob.get("/").data)
+
+        job_id = self.insert_owned_job(
+            "alice", "kept_sample", "succeeded", "2026-08-01T00:00:00Z"
+        )
+        self.assertEqual(
+            self.client.get("/jobs/{}/report".format(job_id)).status_code, 404
+        )
+        self.assertEqual(
+            self.client.get("/api/jobs/{}/reports/tsv".format(job_id)).status_code, 404
+        )
+        self.assertEqual(
+            self.client.get("/api/jobs/{}/reports/pdf".format(job_id)).status_code, 404
+        )
+        bare_page = self.client.get("/jobs/{}".format(job_id))
+        self.assertIn("kept_sample".encode(), bare_page.data)
+        self.assertIn("没有单独的测序数据记录".encode(), bare_page.data)
+        self.assertIn("比较尚未就绪".encode(), bare_page.data)
+        self.assertIn("重新分析".encode(), bare_page.data)
+        self.assertIn(b'id="result-download"', bare_page.data)
+        self.assertIn(b'id="job-log"', bare_page.data)
+        self.assertIn("PDF 未提供".encode(), bare_page.data)
+        self.assertIn(b'id="host-usage" hidden', bare_page.data)
+        self.assertIn("不是本任务的历史曲线".encode(), bare_page.data)
+        self.assertEqual(bare_page.get_data(as_text=True).count("推荐"), 1)
+
+        output_dir = self.app.config["JOBS_ROOT"] / job_id / "output"
+        comparison = (
+            "Assembler\t# contigs\tTotal length\tLargest contig\tN50\tL50\tGC (%)\n"
+            "spades\t10\t5000\t3000\t800\t2\t45.5\n"
+            "megahit\t40\t9000\t1000\t2000\t4\t50\n"
+            "shovill\t1\t1\t1\t99999\t1\t1\n"
+        )
+        (output_dir / "comparison.tsv").write_text(comparison, encoding="utf-8")
+        (output_dir / "versions.txt").write_text("fastp\tfastp 0.23.4\n", encoding="utf-8")
+        (output_dir / "run.log").write_text(
+            "Threads per method: 3\nMemory per method: 7 GiB\n",
+            encoding="utf-8",
+        )
+        fastp_dir = output_dir / "fastp"
+        fastp_dir.mkdir()
+        (fastp_dir / "kept_sample_fastp.json").write_text(
+            json.dumps({"summary": {"before_filtering": {"total_reads": 18, "q20_rate": 0.25}}}),
+            encoding="utf-8",
+        )
+        (output_dir / "stages.json").write_text(
+            json.dumps(
+                {
+                    "stages": [
+                        {
+                            "id": "spades",
+                            "label": "组装",
+                            "state": "failed",
+                            "detail": "spades exited 1",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        with closing(sqlite3.connect(self.app.config["DATABASE"])) as db:
+            db.execute(
+                "UPDATE jobs SET assemblers = ?, error = ? WHERE id = ?",
+                (
+                    json.dumps(["spades", "unicycler", "megahit"]),
+                    "pipeline exploded",
+                    job_id,
+                ),
+            )
+            db.commit()
+
+        detail = self.client.get("/api/jobs/{}".format(job_id)).json["job"]["detail"]
+        comparison_detail = detail["comparison"]
+        self.assertEqual(
+            [column["id"] for column in comparison_detail["columns"]],
+            ["spades", "unicycler", "megahit"],
+        )
+        n50 = next(metric for metric in comparison_detail["metrics"] if metric["name"] == "N50")
+        self.assertEqual([cell["text"] for cell in n50["cells"]], ["800", "无记录", "2000"])
+        self.assertEqual(
+            [(bar["id"], bar["width"]) for bar in comparison_detail["charts"][0]["bars"]],
+            [("spades", 40), ("megahit", 100)],
+        )
+        self.assertNotIn("shovill", [bar["id"] for bar in comparison_detail["charts"][0]["bars"]])
+        self.assertEqual(comparison_detail["missing"], ["unicycler"])
+        self.assertEqual(comparison_detail["extra"], ["shovill"])
+        self.assertEqual(detail["resources"]["threads"], 3)
+        self.assertEqual(detail["resources"]["memory_gib"], 7)
+        self.assertNotIn("best", json.dumps(detail))
+        self.assertNotIn("rank", json.dumps(detail))
+
+        page = self.client.get("/jobs/{}".format(job_id))
+        text = page.get_data(as_text=True)
+        self.assertIn("本次运行记录：每种方法 3 线程。", text)
+        self.assertIn("本次运行记录：每种方法 7 GiB。", text)
+        self.assertNotIn("任务记录的线程数", text)
+        self.assertIn("无记录", text)
+        self.assertNotIn("99999", text)
+        self.assertLess(text.find(">SPAdes<"), text.find(">Unicycler<"))
+        self.assertLess(text.find(">Unicycler<"), text.find(">MEGAHIT<"))
+        self.assertIn('style="width: 40%"', text)
+        self.assertEqual(text.count("推荐"), 1)
+        self.assertIn("不要仅根据 N50 自动推荐最佳组装结果。", text)
+        self.assertNotIn("<progress", text)
+
+        report = self.client.get("/jobs/{}/report".format(job_id))
+        self.assertEqual(report.status_code, 200)
+        report_text = report.get_data(as_text=True)
+        self.assertIn("fastp 0.23.4", report_text)
+        self.assertNotIn("SPAdes 3.15.5", report_text)
+        self.assertIn("过滤前总 reads", report_text)
+        self.assertIn(">18<", report_text)
+        self.assertIn("0.25", report_text)
+        self.assertNotIn("过滤前 Q30 比例", report_text)
+        self.assertNotIn("质量控制指标未记录", report_text)
+        self.assertIn("pipeline exploded", report_text)
+        self.assertIn("spades exited 1", report_text)
+        self.assertNotIn("99999", report_text)
+        self.assertEqual(report_text.count("推荐"), 1)
+        self.assertIn("PDF 未提供", report_text)
+
+        downloaded = self.client.get("/api/jobs/{}/reports/tsv".format(job_id))
+        self.assertEqual(downloaded.status_code, 200)
+        tsv = downloaded.get_data(as_text=True)
+        downloaded.close()
+        self.assertIn("assembly\tN50\tspades\t800", tsv)
+        self.assertIn("assembly\t\tunicycler\t无记录", tsv)
+        self.assertIn("version\tfastp\t\tfastp 0.23.4", tsv)
+        self.assertIn("qc\t过滤前总 reads\t\t18", tsv)
+        self.assertIn("anomaly\t任务错误\t\tpipeline exploded", tsv)
+        self.assertNotIn("99999", tsv)
+        self.assertNotIn("SPAdes 3.15.5", tsv)
+        html = self.client.get("/api/jobs/{}/reports/html".format(job_id))
+        self.assertEqual(html.status_code, 200)
+        self.assertIn(b"fastp 0.23.4", html.data)
+        html.close()
+        self.assertEqual(bob.get("/jobs/{}/report".format(job_id)).status_code, 404)
+        stolen = bob.get("/api/jobs/{}/reports/tsv".format(job_id))
+        self.assertEqual(stolen.status_code, 404)
+        self.assertNotIn(b"fastp 0.23.4", stolen.data)
+        self.assertNotIn(b"pipeline exploded", stolen.data)
+
+        secret = self.root / "report-secret.txt"
+        secret.write_text("TOPSECRET-REPORT", encoding="utf-8")
+        report_tsv = self.app.config["REPORTS_ROOT"] / job_id / "report.tsv"
+        report_tsv.unlink()
+        report_tsv.symlink_to(secret)
+        blocked = self.client.get("/api/jobs/{}/reports/tsv".format(job_id))
+        self.assertEqual(blocked.status_code, 404)
+        self.assertNotIn(b"TOPSECRET-REPORT", blocked.data)
+
 
 if __name__ == "__main__":
     unittest.main()

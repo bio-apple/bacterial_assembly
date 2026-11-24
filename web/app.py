@@ -38,6 +38,14 @@ from werkzeug.utils import secure_filename
 
 from scripts.common import cpu_share
 from scripts.stage_record import build_progress, load_stage_record
+from web.reports import (
+    assemble_report_model,
+    comparison_view,
+    report_tsv,
+    resource_lines,
+    result_sources_present,
+    selected_assemblers,
+)
 from web.errors import (
     DISK_FULL,
     FASTQ_EMPTY,
@@ -98,6 +106,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     cancel_requested INTEGER NOT NULL DEFAULT 0,
     worker_pid INTEGER,
     rerun_of TEXT,
+    sample_id TEXT,
+    sequencing_batch_id TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     started_at TEXT,
@@ -132,6 +142,26 @@ CREATE TABLE IF NOT EXISTS notices (
     read_at TEXT
 );
 CREATE INDEX IF NOT EXISTS notices_owner_id ON notices(owner, id DESC);
+CREATE TABLE IF NOT EXISTS samples (
+    id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (owner, name)
+);
+CREATE INDEX IF NOT EXISTS samples_owner_name ON samples(owner, name);
+CREATE TABLE IF NOT EXISTS sequencing_batches (
+    id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    sample_id TEXT NOT NULL,
+    r1_filename TEXT NOT NULL,
+    r2_filename TEXT NOT NULL,
+    r1_sha256 TEXT,
+    r2_sha256 TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS sequencing_batches_owner_sample
+    ON sequencing_batches(owner, sample_id);
 """
 
 
@@ -291,6 +321,48 @@ def ensure_rerun_column(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE jobs ADD COLUMN rerun_of TEXT")
 
 
+def ensure_sample_columns(db: sqlite3.Connection) -> None:
+    columns = {info[1] for info in db.execute("PRAGMA table_info(jobs)")}
+    if "sample_id" not in columns:
+        db.execute("ALTER TABLE jobs ADD COLUMN sample_id TEXT")
+    if "sequencing_batch_id" not in columns:
+        db.execute("ALTER TABLE jobs ADD COLUMN sequencing_batch_id TEXT")
+
+
+def reuse_or_create_sample(db: sqlite3.Connection, owner: str, name: str) -> str:
+    existing = db.execute(
+        "SELECT id FROM samples WHERE owner = ? AND name = ?",
+        (owner, name),
+    ).fetchone()
+    if existing:
+        return existing[0]
+    sample_id = str(uuid.uuid4())
+    try:
+        db.execute(
+            "INSERT INTO samples (id, owner, name) VALUES (?, ?, ?)",
+            (sample_id, owner, name),
+        )
+    except sqlite3.IntegrityError:
+        existing = db.execute(
+            "SELECT id FROM samples WHERE owner = ? AND name = ?",
+            (owner, name),
+        ).fetchone()
+        if existing is None:
+            raise
+        return existing[0]
+    return sample_id
+
+
+def checksum_or_none(value) -> str | None:
+    if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value):
+        return value
+    return None
+
+
+def column_value(row: sqlite3.Row, name: str):
+    return row[name] if name in row.keys() else None
+
+
 def append_job_log(log_path: str | Path, text: str) -> None:
     path = Path(log_path)
     line = text if text.endswith("\n") else text + "\n"
@@ -364,6 +436,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             )
         ensure_cancellation_schema(db)
         ensure_rerun_column(db)
+        ensure_sample_columns(db)
         db.commit()
     finally:
         db.close()
@@ -400,6 +473,7 @@ def create_app(test_config: dict | None = None) -> Flask:
                 "compare_jobs": "history",
                 "module_index": "modules",
                 "job_page": "monitor",
+                "job_report": "monitor",
             }.get(request.endpoint, "modules"),
         }
 
@@ -479,6 +553,98 @@ def create_app(test_config: dict | None = None) -> Flask:
         if row is None:
             abort(404)
         return row
+
+    def linked_sample(row: sqlite3.Row) -> tuple[str, dict | None]:
+        sample_name = row["sample"]
+        sample_id = column_value(row, "sample_id")
+        batch_id = column_value(row, "sequencing_batch_id")
+        batch = None
+        with connection() as db:
+            if sample_id:
+                found = db.execute(
+                    "SELECT name FROM samples WHERE id = ? AND owner = ?",
+                    (sample_id, row["owner"]),
+                ).fetchone()
+                if found:
+                    sample_name = found["name"]
+            if sample_id and batch_id:
+                found_batch = db.execute(
+                    "SELECT r1_filename, r2_filename, r1_sha256, r2_sha256 "
+                    "FROM sequencing_batches WHERE id = ? AND owner = ? AND sample_id = ?",
+                    (batch_id, row["owner"], sample_id),
+                ).fetchone()
+                if found_batch:
+                    batch = {
+                        "r1_filename": found_batch["r1_filename"],
+                        "r2_filename": found_batch["r2_filename"],
+                        "r1_sha256": found_batch["r1_sha256"],
+                        "r2_sha256": found_batch["r2_sha256"],
+                    }
+        return sample_name, batch
+
+    def job_detail(row: sqlite3.Row) -> dict:
+        sample_name, batch = linked_sample(row)
+        directories = pipeline_directories(row["output_dir"])
+        run_log = first_pipeline_text(directories, "run.log", 2 * 1024 * 1024)
+        resources = resource_lines(row["threads"], run_log)
+        assemblers = selected_assemblers(row["assemblers"])
+        comparison_text = first_pipeline_text(directories, "comparison.tsv", 2 * 1024 * 1024)
+        parsed = parse_comparison_text(comparison_text)
+        return {
+            "sample_name": sample_name,
+            "sample_id": column_value(row, "sample_id"),
+            "sequencing_batch_id": column_value(row, "sequencing_batch_id"),
+            "batch": batch,
+            "inputs": input_facts(row),
+            "parameters": {
+                "assemblers": assemblers or [],
+                "spades_kmers": row["spades_kmers"],
+                "spades_careful": bool(row["spades_careful"]),
+            },
+            "resources": resources,
+            "comparison": comparison_view(assemblers, parsed),
+            "report_ready": result_sources_present(
+                first_pipeline_text(directories, "versions.txt", 1024 * 1024),
+                load_fastp_documents(directories),
+                parsed,
+                stage_failures(row),
+            ),
+            "inputs_available": inputs_ready(row),
+        }
+
+    def job_report_model(row: sqlite3.Row) -> dict | None:
+        sample_name, batch = linked_sample(row)
+        directories = pipeline_directories(row["output_dir"])
+        versions_text = first_pipeline_text(directories, "versions.txt", 1024 * 1024)
+        fastp_documents = load_fastp_documents(directories)
+        comparison_rows = parse_comparison_text(
+            first_pipeline_text(directories, "comparison.tsv", 2 * 1024 * 1024)
+        )
+        failures = stage_failures(row)
+        if not result_sources_present(
+            versions_text, fastp_documents, comparison_rows, failures
+        ):
+            return None
+        assemblers = selected_assemblers(row["assemblers"])
+        resources = resource_lines(
+            row["threads"],
+            first_pipeline_text(directories, "run.log", 2 * 1024 * 1024),
+        )
+        return assemble_report_model(
+            sample_name=sample_name,
+            status_label=JOB_STATUS_LABELS.get(row["status"], row["status"]),
+            batch=batch,
+            inputs=input_facts(row),
+            assemblers=assemblers,
+            spades_kmers=row["spades_kmers"],
+            spades_careful=bool(row["spades_careful"]),
+            resources=resources,
+            versions_text=versions_text,
+            fastp_documents=fastp_documents,
+            comparison_rows=comparison_rows,
+            job_error=row["error"],
+            stage_failures=failures,
+        )
 
     @app.get("/login")
     def login():
@@ -624,6 +790,14 @@ def create_app(test_config: dict | None = None) -> Flask:
             ),
         )
 
+    def owned_sample_names(owner: str) -> list[str]:
+        with connection() as db:
+            rows = db.execute(
+                "SELECT name FROM samples WHERE owner = ? ORDER BY name",
+                (owner,),
+            ).fetchall()
+        return [row["name"] for row in rows]
+
     @app.get("/")
     @login_required
     def dashboard():
@@ -632,6 +806,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             username=session["username"],
             csrf_token=csrf_token(),
             assemblers=ASSEMBLERS,
+            samples=owned_sample_names(session["username"]),
         )
 
     def history_filters() -> dict:
@@ -1077,6 +1252,11 @@ def create_app(test_config: dict | None = None) -> Flask:
                 "R{}".format(index) + fastq_extension(upload["filename"])
                 for index, upload in enumerate(claimed, start=1)
             )
+            original_names = (claimed[0]["filename"], claimed[1]["filename"])
+            original_sha = (
+                checksum_or_none(claimed[0]["sha256"]),
+                checksum_or_none(claimed[1]["sha256"]),
+            )
         else:
             r1 = request.files.get("r1")
             r2 = request.files.get("r2")
@@ -1086,6 +1266,8 @@ def create_app(test_config: dict | None = None) -> Flask:
                 "R1" + fastq_extension(r1.filename),
                 "R2" + fastq_extension(r2.filename),
             )
+            original_names = (secure_filename(r1.filename), secure_filename(r2.filename))
+            original_sha = (None, None)
         job_id = str(uuid.uuid4())
         incoming_dir = app.config["UPLOAD_INCOMING"] / job_id
         validated_dir = app.config["UPLOAD_VALIDATED"] / job_id
@@ -1152,11 +1334,26 @@ def create_app(test_config: dict | None = None) -> Flask:
                 encoding="utf-8",
             )
             with connection() as db:
+                sample_id = reuse_or_create_sample(db, session["username"], sample)
+                batch_id = str(uuid.uuid4())
+                db.execute(
+                    "INSERT INTO sequencing_batches (id, owner, sample_id, r1_filename, "
+                    "r2_filename, r1_sha256, r2_sha256) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        batch_id,
+                        session["username"],
+                        sample_id,
+                        original_names[0],
+                        original_names[1],
+                        original_sha[0],
+                        original_sha[1],
+                    ),
+                )
                 db.execute(
                     "INSERT INTO jobs (id, owner, module_id, status, assemblers, threads, "
                     "sample, spades_kmers, spades_careful, input_r1, input_r2, "
-                    "output_dir, log_path) "
-                    "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "output_dir, log_path, sample_id, sequencing_batch_id) "
+                    "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         job_id,
                         session["username"],
@@ -1170,6 +1367,8 @@ def create_app(test_config: dict | None = None) -> Flask:
                         str(input_paths[1]),
                         str(output_dir),
                         str(log_path),
+                        sample_id,
+                        batch_id,
                     ),
                 )
                 if claimed:
@@ -1270,6 +1469,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             csrf_token=csrf_token(),
             job=serialize_job(row),
             progress=job_progress(row),
+            detail=job_detail(row),
         )
 
     @app.get("/api/jobs/<job_id>")
@@ -1278,7 +1478,48 @@ def create_app(test_config: dict | None = None) -> Flask:
         row = owned_job(job_id)
         job = serialize_job(row)
         job["progress"] = job_progress(row)
+        job["detail"] = job_detail(row)
         return jsonify(job=job)
+
+    @app.get("/jobs/<job_id>/report")
+    @login_required
+    def job_report(job_id):
+        row = owned_job(job_id)
+        report = job_report_model(row)
+        if report is None:
+            abort(404, description="这份任务还没有可导出的结果。")
+        return render_template(
+            "report.html",
+            username=session["username"],
+            csrf_token=csrf_token(),
+            job=serialize_job(row),
+            report=report,
+        )
+
+    @app.get("/api/jobs/<job_id>/reports/<kind>")
+    @login_required
+    def download_job_report(job_id, kind):
+        if kind not in ("html", "tsv"):
+            abort(404)
+        row = owned_job(job_id)
+        report = job_report_model(row)
+        if report is None:
+            abort(404, description="这份任务还没有可导出的结果。")
+        html = render_template("report_document.html", report=report)
+        try:
+            html_path, tsv_path = store_report_files(row["id"], html, report_tsv(report))
+        except OSError as error:
+            if getattr(error, "errno", None) in (errno.ELOOP, errno.EPERM):
+                abort(404)
+            return storage_error(error, "Could not store job report")
+        path = html_path if kind == "html" else tsv_path
+        suffix = "html" if kind == "html" else "tsv"
+        mimetype = "text/html; charset=utf-8" if kind == "html" else "text/plain; charset=utf-8"
+        return send_regular_report(
+            path,
+            download_name="assembly-report-{}.{}".format(row["id"][:8], suffix),
+            mimetype=mimetype,
+        )
 
     @app.get("/api/jobs/<job_id>/log")
     @login_required
@@ -1371,6 +1612,8 @@ def create_app(test_config: dict | None = None) -> Flask:
             return rerun_response({"error": "原来的测序文件已经不在，不能重新分析。"}, 409)
 
         new_id = str(uuid.uuid4())
+        kept_sample_id = column_value(row, "sample_id")
+        kept_batch_id = column_value(row, "sequencing_batch_id")
         job_dir = app.config["JOBS_ROOT"] / new_id
         input_dir = job_dir / "input"
         output_dir = job_dir / "output"
@@ -1388,8 +1631,8 @@ def create_app(test_config: dict | None = None) -> Flask:
                 db.execute(
                     "INSERT INTO jobs (id, owner, module_id, status, assemblers, threads, "
                     "sample, spades_kmers, spades_careful, input_r1, input_r2, "
-                    "output_dir, log_path, rerun_of) "
-                    "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "output_dir, log_path, rerun_of, sample_id, sequencing_batch_id) "
+                    "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         new_id,
                         session["username"],
@@ -1404,6 +1647,8 @@ def create_app(test_config: dict | None = None) -> Flask:
                         str(output_dir),
                         str(log_path),
                         row["id"],
+                        kept_sample_id,
+                        kept_batch_id,
                     ),
                 )
         except FileNotFoundError:
@@ -1717,6 +1962,178 @@ def notable_output_files(output_dir: str) -> list[str]:
     return found
 
 
+FASTP_JSON_LIMIT = 20 * 1024 * 1024
+
+
+def pipeline_directories(output_dir: str) -> list[Path]:
+    try:
+        output = contained_path(current_app.config["DATA_ROOT"], output_dir)
+    except (OSError, ValueError):
+        return []
+    found = []
+    root = current_app.config["DATA_ROOT"].resolve()
+    for candidate in (output.parent / "work", output):
+        try:
+            resolved = candidate.resolve(strict=False)
+            if resolved != root and root not in resolved.parents:
+                continue
+            if resolved.is_symlink() or not resolved.is_dir():
+                continue
+        except OSError:
+            continue
+        if resolved not in found:
+            found.append(resolved)
+    return found
+
+
+def read_regular_text(directory: Path, relative: str, limit: int) -> str | None:
+    path = directory.joinpath(*PurePosixPath(relative).parts)
+    try:
+        if path.is_symlink() or not path.is_file() or not is_inside(directory, path):
+            return None
+        if path.stat().st_size > limit:
+            return None
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def first_pipeline_text(directories: list[Path], relative: str, limit: int) -> str | None:
+    for directory in directories:
+        text = read_regular_text(directory, relative, limit)
+        if text and text.strip():
+            return text
+    return None
+
+
+def load_fastp_documents(directories: list[Path]) -> list[dict]:
+    documents = []
+    seen = set()
+    for directory in directories:
+        folder = directory / "fastp"
+        try:
+            if folder.is_symlink() or not folder.is_dir() or not is_inside(directory, folder):
+                continue
+            names = sorted(path.name for path in folder.iterdir())
+        except OSError:
+            continue
+        for name in names:
+            if not name.endswith("_fastp.json") or name in seen:
+                continue
+            path = folder / name
+            try:
+                if path.is_symlink() or not path.is_file() or not is_inside(folder, path):
+                    continue
+                size = path.stat().st_size
+            except OSError:
+                continue
+            seen.add(name)
+            if size <= 0:
+                continue
+            if size > FASTP_JSON_LIMIT:
+                documents.append(
+                    {"name": name, "present": True, "unreadable": True, "payload": None}
+                )
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeError):
+                documents.append(
+                    {"name": name, "present": True, "unreadable": True, "payload": None}
+                )
+                continue
+            if not isinstance(payload, dict):
+                documents.append(
+                    {"name": name, "present": True, "unreadable": True, "payload": None}
+                )
+                continue
+            documents.append(
+                {"name": name, "present": True, "unreadable": False, "payload": payload}
+            )
+    return documents
+
+
+def stage_failures(row: sqlite3.Row) -> list[dict]:
+    try:
+        output_dir = contained_path(current_app.config["DATA_ROOT"], row["output_dir"])
+        record_path = stage_record_path(output_dir)
+    except (OSError, ValueError):
+        return []
+    failures = []
+    for stage in load_stage_record(record_path).get("stages") or []:
+        if not isinstance(stage, dict) or stage.get("state") != "failed":
+            continue
+        item = {"id": stage.get("id"), "label": stage.get("label") or stage.get("id")}
+        detail = stage.get("detail")
+        if isinstance(detail, str) and detail.strip():
+            item["detail"] = detail.strip()
+        failures.append(item)
+    return failures
+
+
+def input_facts(row: sqlite3.Row) -> list[dict]:
+    facts = []
+    for role, key in (("R1", "input_r1"), ("R2", "input_r2")):
+        item = {"role": role, "name": None, "bytes": None}
+        raw = column_value(row, key)
+        if raw:
+            try:
+                path = contained_path(current_app.config["DATA_ROOT"], raw)
+            except (OSError, ValueError):
+                path = None
+            if path is not None:
+                item["name"] = path.name
+                try:
+                    if not path.is_symlink() and path.is_file():
+                        item["bytes"] = path.stat().st_size
+                except OSError:
+                    item["bytes"] = None
+        facts.append(item)
+    return facts
+
+
+def write_regular_file(path: Path, payload: bytes) -> None:
+    if path.is_symlink():
+        raise OSError(errno.ELOOP, "report path is a symlink")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags, 0o644)
+    try:
+        os.write(fd, payload)
+    finally:
+        os.close(fd)
+
+
+def store_report_files(job_id: str, html: str, tsv: str) -> tuple[Path, Path]:
+    root = Path(current_app.config["REPORTS_ROOT"]).resolve()
+    directory = root / str(uuid.UUID(str(job_id)))
+    if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
+        raise OSError(errno.ELOOP, "report directory is not a real directory")
+    if directory != root and root not in directory.resolve(strict=False).parents:
+        raise OSError(errno.EPERM, "report directory escapes the reports root")
+    directory.mkdir(parents=True, exist_ok=True)
+    if directory.is_symlink() or not directory.is_dir() or not is_inside(root, directory):
+        raise OSError(errno.ELOOP, "report directory is not a real directory")
+    html_path = directory / "report.html"
+    tsv_path = directory / "report.tsv"
+    write_regular_file(html_path, html.encode("utf-8"))
+    write_regular_file(tsv_path, tsv.encode("utf-8"))
+    return html_path, tsv_path
+
+
+def send_regular_report(path: Path, download_name: str, mimetype: str):
+    root = Path(current_app.config["REPORTS_ROOT"]).resolve()
+    if path.is_symlink() or not path.is_file() or not is_inside(root, path):
+        abort(404)
+    return send_file(
+        path,
+        as_attachment=True,
+        download_name=download_name,
+        mimetype=mimetype,
+    )
+
+
 def comparison_file(output_dir: str) -> Path | None:
     try:
         root = contained_path(current_app.config["DATA_ROOT"], output_dir)
@@ -1767,6 +2184,12 @@ def parse_comparison_tsv(path: Path | None) -> list[dict]:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
+        return []
+    return parse_comparison_text(text)
+
+
+def parse_comparison_text(text: str | None) -> list[dict]:
+    if not text or not text.strip():
         return []
     rows = list(csv.reader(text.splitlines(), delimiter="\t"))
     if not rows:

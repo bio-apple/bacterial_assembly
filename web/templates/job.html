@@ -57,6 +57,77 @@
     </dl>
     <p id="job-error" class="monitor-error"{% if not job.error %} hidden{% endif %}>{{ job.error or "" }}</p>
 
+    <section class="monitor-block" aria-labelledby="sample-title">
+      <div class="monitor-section-head">
+        <h2 id="sample-title">样本与测序数据</h2>
+        <p>样本是生物材料。测序数据是这一次的双端 reads。</p>
+      </div>
+      <dl class="record-grid" id="sequencing-data">
+        <div>
+          <dt>样本</dt>
+          <dd id="sample-name">{{ detail.sample_name }}</dd>
+        </div>
+        {% if detail.batch %}
+        <div>
+          <dt>R1</dt>
+          <dd>{{ detail.batch.r1_filename }}<span class="checksum">{% if detail.batch.r1_sha256 %}{{ detail.batch.r1_sha256 }}{% else %}未记录校验值{% endif %}</span></dd>
+        </div>
+        <div>
+          <dt>R2</dt>
+          <dd>{{ detail.batch.r2_filename }}<span class="checksum">{% if detail.batch.r2_sha256 %}{{ detail.batch.r2_sha256 }}{% else %}未记录校验值{% endif %}</span></dd>
+        </div>
+        {% else %}
+        <div>
+          <dt>测序数据</dt>
+          <dd>没有单独的测序数据记录。样本名称仍是 {{ detail.sample_name }}。</dd>
+        </div>
+        {% endif %}
+        {% for item in detail.inputs %}
+        <div>
+          <dt>任务输入 {{ item.role }}</dt>
+          <dd>{% if item.name %}{{ item.name }}{% if item.bytes is not none %}<span class="checksum">{{ item.bytes }} 字节</span>{% endif %}{% else %}文件不在{% endif %}</dd>
+        </div>
+        {% endfor %}
+      </dl>
+    </section>
+
+    <section class="monitor-block" aria-labelledby="parameter-title">
+      <div class="monitor-section-head">
+        <h2 id="parameter-title">分析参数</h2>
+        <p>这次任务实际保存的选择。</p>
+      </div>
+      <dl class="record-grid">
+        <div>
+          <dt>组装器</dt>
+          <dd>{{ detail.parameters.assemblers | join(" / ") or "未记录" }}</dd>
+        </div>
+        <div>
+          <dt>SPAdes k-mer</dt>
+          <dd>{{ detail.parameters.spades_kmers or "未设置" }}</dd>
+        </div>
+        <div>
+          <dt>SPAdes careful</dt>
+          <dd>{{ "开启" if detail.parameters.spades_careful else "关闭" }}</dd>
+        </div>
+        <div>
+          <dt>线程</dt>
+          <dd id="assigned-threads">{{ detail.resources.threads_text }}</dd>
+        </div>
+        <div>
+          <dt>内存</dt>
+          <dd id="assigned-memory">{{ detail.resources.memory_text }}</dd>
+        </div>
+      </dl>
+      <div class="host-usage" id="host-usage"{% if job.status not in ("running", "cancelling") %} hidden{% endif %}>
+        <h3>当前主机占用</h3>
+        <p id="host-usage-note">此刻这台机器的占用，不是本任务的历史曲线。</p>
+        <dl id="host-usage-metrics" class="record-grid" hidden>
+          <div><dt>CPU</dt><dd id="host-cpu"></dd></div>
+          <div><dt>内存</dt><dd id="host-memory"></dd></div>
+        </dl>
+      </div>
+    </section>
+
     <section class="monitor-rail-section" aria-labelledby="rail-title">
       <div class="monitor-section-head">
         <h2 id="rail-title">阶段</h2>
@@ -89,13 +160,31 @@
       </ol>
     </section>
 
+    {% with comparison=detail.comparison %}
+    {% include "assembler_comparison.html" %}
+    {% endwith %}
+
     <div class="monitor-actions">
       <button type="button" class="button button-cancel" id="cancel-job"{% if job.status not in ("queued", "running") %} hidden{% endif %}>取消任务</button>
       <a id="result-download" class="button button-download" {% if not job.archive_available %}hidden{% endif %}
          href="{{ url_for('download_job', job_id=job.id) }}">
         {{ "下载部分结果" if job.status in ("failed", "cancelled") else "下载分析结果" }}
       </a>
+      {% if detail.inputs_available %}
+      <button type="button" class="history-rerun" id="rerun-job" data-rerun-job="{{ job.id }}">重新分析</button>
+      {% else %}
+      <p class="history-rerun-error">原来的测序文件已经不在，不能重新分析。</p>
+      {% endif %}
       <a class="monitor-log-link" href="{{ url_for('download_job_log', job_id=job.id) }}">下载运行日志</a>
+    </div>
+    <p id="rerun-error" class="history-rerun-error" role="alert"></p>
+    <div id="report-links" class="report-links">
+      <p data-report-ready{% if not detail.report_ready %} hidden{% endif %}>
+        <a href="{{ url_for('job_report', job_id=job.id) }}">查看 HTML 报告</a>
+        <a href="{{ url_for('download_job_report', job_id=job.id, kind='tsv') }}">下载 TSV</a>
+      </p>
+      <p data-report-waiting{% if detail.report_ready %} hidden{% endif %}>报告还不能导出。比较表、软件版本、质量控制或阶段失败记录还不在。</p>
+      <p class="report-absent">PDF 未提供。</p>
     </div>
     <p id="partial-note" class="monitor-note"{% if job.status != "cancelled" or job.archive_available %} hidden{% endif %}>运行日志已保留，结果不完整。</p>
 

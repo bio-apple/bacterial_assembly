@@ -1,0 +1,78 @@
+<section class="monitor-block">
+  <h2>样本与测序数据</h2>
+  <dl class="record-grid">
+    {% for item in report.record %}
+    <div>
+      <dt>{{ item.key }}</dt>
+      <dd>{{ item.value }}{% if item.checksum %}<span class="checksum">{{ item.checksum }}</span>{% endif %}</dd>
+    </div>
+    {% endfor %}
+  </dl>
+</section>
+
+<section class="monitor-block">
+  <h2>分析参数</h2>
+  <dl class="record-grid">
+    {% for item in report.parameters %}
+    <div>
+      <dt>{{ item.key }}</dt>
+      <dd>{{ item.value }}</dd>
+    </div>
+    {% endfor %}
+  </dl>
+</section>
+
+<section class="monitor-block">
+  <h2>软件版本</h2>
+  {% if report.versions %}
+  <div class="compare-scroll">
+    <table class="compare-table">
+      <tbody>
+        {% for item in report.versions %}
+        <tr>
+          <th scope="row">{{ item.name or "记录" }}</th>
+          <td>{{ item.version }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+  {% if report.versions_note %}<p class="report-note">{{ report.versions_note }}</p>{% endif %}
+</section>
+
+<section class="monitor-block">
+  <h2>质量控制指标</h2>
+  {% if report.qc %}
+  <div class="compare-scroll">
+    <table class="compare-table">
+      <tbody>
+        {% for item in report.qc %}
+        <tr>
+          <th scope="row">{{ item.label }}</th>
+          <td>{{ item.value }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <caption>只摘录 fastp JSON 里实际写出的字段。</caption>
+    </table>
+  </div>
+  {% endif %}
+  {% if report.qc_note %}<p class="report-note">{{ report.qc_note }}</p>{% endif %}
+</section>
+
+{% with comparison=report.comparison %}
+{% include "assembler_comparison.html" %}
+{% endwith %}
+
+<section class="monitor-block">
+  <h2>异常提示</h2>
+  {% if report.anomalies %}
+  <ul class="report-anomalies">
+    {% for item in report.anomalies %}
+    <li><strong>{{ item.kind }}</strong> {{ item.text }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if report.anomaly_note %}<p class="report-note">{{ report.anomaly_note }}</p>{% endif %}
+</section>

@@ -76,9 +76,15 @@
           {% include "components/file_uploader.html" %}
           <div class="field-row">
             <label class="field">
-              <span>样本名称</span>
-              <input name="sample" value="isolate_01" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" required>
+              <span>样本</span>
+              <input name="sample" list="known-samples" value="isolate_01" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" required>
+              <small>生物材料名称。同名样本会沿用，这次上传记为新的测序数据。</small>
             </label>
+            <datalist id="known-samples">
+              {% for name in samples %}
+              <option value="{{ name }}"></option>
+              {% endfor %}
+            </datalist>
             <p class="resource-policy">所选组装方法按选择顺序串行执行，每种方法尝试使用约 90% 的逻辑 CPU 和物理内存。样本任务仍按提交顺序排队；单个方法失败不阻止其余方法。</p>
           </div>
           <fieldset class="assembler-select">
