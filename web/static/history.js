@@ -22,6 +22,23 @@
     return `${remainder}秒`;
   };
 
+  const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
+  document.querySelectorAll("[data-cancel-job]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      const response = await fetch(`/api/jobs/${encodeURIComponent(button.dataset.cancelJob)}/cancel`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRF-Token": csrf || "" },
+      });
+      if (response.status === 401) {
+        window.location.assign("/login");
+        return;
+      }
+      window.location.reload();
+    });
+  });
+
   document.querySelectorAll("[data-live-duration]").forEach((duration) => {
     const initialSeconds = Number(duration.dataset.elapsedSeconds);
     const started = performance.now();

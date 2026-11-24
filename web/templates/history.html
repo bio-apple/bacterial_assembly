@@ -53,18 +53,26 @@
           </div>
           <div class="history-cell history-status" data-label="任务状态">
             <span class="status-pill status-{{ job.status }}">
-              {{ {"queued": "排队中", "running": "运行中", "succeeded": "已完成", "failed": "失败"}.get(job.status, job.status) }}
+              {{ {"queued": "排队中", "running": "分析中", "cancelling": "取消中", "cancelled": "已取消", "succeeded": "已完成", "failed": "失败"}.get(job.status, job.status) }}
             </span>
+            <a class="history-monitor" href="{{ url_for('job_page', job_id=job.id) }}">查看进度</a>
             {% if job.result_available %}
             <a class="history-result-download" href="{{ url_for('download_job', job_id=job.id) }}"
                aria-label="下载 {{ job.sample }} 的 {{ job.module_name }} 输出结果">
-              {% if job.status == "failed" %}下载部分结果{% else %}下载输出结果{% endif %}
+              {% if job.status in ("failed", "cancelled") %}下载部分结果{% else %}下载输出结果{% endif %}
               <span aria-hidden="true">↓</span>
             </a>
+            {% elif job.status == "cancelled" %}
+            <span class="history-result-pending">运行日志已保留，结果不完整。</span>
+            {% elif job.status == "cancelling" %}
+            <span class="history-result-pending">正在停止，日志会保留</span>
             {% elif job.status in ("queued", "running") %}
             <span class="history-result-pending">完成后可下载</span>
             {% else %}
             <span class="history-result-pending">无可下载结果</span>
+            {% endif %}
+            {% if job.status in ("queued", "running") %}
+            <button type="button" class="history-cancel" data-cancel-job="{{ job.id }}">取消任务</button>
             {% endif %}
             {% if job.log_available %}
             <a class="history-log-download" href="{{ url_for('download_job_log', job_id=job.id) }}"
@@ -80,14 +88,14 @@
             <time class="local-time" data-timestamp="{{ job.completed_at }}" datetime="{{ job.completed_at }}">
               {{ job.completed_at }}
             </time>
-            {% elif job.status == "running" %}
-            <span>运行中</span>
+            {% elif job.status in ("running", "cancelling") %}
+            <span>尚未结束</span>
             {% else %}
             <span>—</span>
             {% endif %}
           </div>
           <div class="history-cell history-runtime" data-label="运行时间">
-            {% if job.status == "running" and job.runtime_seconds is not none %}
+            {% if job.status in ("running", "cancelling") and job.runtime_seconds is not none %}
             <span class="runtime-value" data-live-duration data-elapsed-seconds="{{ job.runtime_seconds }}">
               {{ job.runtime_label }}
             </span>

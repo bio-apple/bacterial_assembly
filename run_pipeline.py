@@ -20,6 +20,7 @@ from scripts.common import (
     validate_sample,
 )
 from scripts.run_spades import parse_kmers
+from scripts.stage_record import QUAST_EVALUATIONS, StageRecord, quast_stage_id
 
 
 ROOT = Path(__file__).resolve().parent
@@ -170,6 +171,20 @@ def run_contig_filter(
         raise subprocess.CalledProcessError(result.returncode, command)
 
 
+def _record_method_error(
+    error: Exception,
+    method_log: Path,
+    root_log: Path,
+    log_lock: threading.Lock,
+    log_prefix: str,
+) -> None:
+    message = "ERROR: {} (see {})".format(error, method_log)
+    append_log(method_log, message)
+    with log_lock:
+        append_log(root_log, "{}{}\n".format(log_prefix, message))
+    print("{}{}".format(log_prefix, message), file=sys.stderr)
+
+
 def run_assembler(
     assembler: str,
     outdir: Path,
@@ -180,6 +195,7 @@ def run_assembler(
     spades_careful: bool,
     root_log: Path,
     log_lock: threading.Lock,
+    stages: StageRecord,
 ) -> tuple[str, bool]:
     method_log = outdir / "logs" / "{}.log".format(assembler)
     method_versions = outdir / "logs" / "{}.versions.txt".format(assembler)
@@ -191,6 +207,7 @@ def run_assembler(
             "{}Starting method with {} threads".format(log_prefix, thread_count),
         )
 
+    stages.start(assembler)
     try:
         arguments = [
             "--r1",
@@ -223,6 +240,7 @@ def run_assembler(
         filtered_1000 = (
             outdir / "assemblies" / assembler / "contigs_gt1000bp.fasta"
         )
+        stages.note(assembler, "正在按长度过滤 contig")
         run_contig_filter(
             contigs,
             filtered_500,
@@ -232,21 +250,31 @@ def run_assembler(
             log_lock,
             log_prefix,
         )
-        evaluations = [
-            (contigs, outdir / "quast" / assembler, "original"),
-            (
-                filtered_500,
-                outdir / "quast" / assembler / "gt500bp",
-                ">500 bp",
-            ),
-            (
-                filtered_1000,
-                outdir / "quast" / assembler / "gt1000bp",
-                ">1000 bp",
-            ),
-        ]
-        for evaluation, quast_dir, label in evaluations:
-            if evaluation.stat().st_size == 0:
+        stages.finish(assembler)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+        stages.finish(assembler, "failed", detail=str(error))
+        _record_method_error(error, method_log, root_log, log_lock, log_prefix)
+        return assembler, False
+
+    evaluations = [
+        (contigs, outdir / "quast" / assembler, "original"),
+        (
+            filtered_500,
+            outdir / "quast" / assembler / "gt500bp",
+            ">500 bp",
+        ),
+        (
+            filtered_1000,
+            outdir / "quast" / assembler / "gt1000bp",
+            ">1000 bp",
+        ),
+    ]
+    for (evaluation, quast_dir, label), (evaluation_id, evaluation_label) in zip(
+        evaluations, QUAST_EVALUATIONS
+    ):
+        stage_id = quast_stage_id(assembler, evaluation_id)
+        try:
+            if not evaluation.is_file() or evaluation.stat().st_size == 0:
                 message = "Skipping QUAST for {} {}: no contigs meet threshold".format(
                     assembler, label
                 )
@@ -254,7 +282,10 @@ def run_assembler(
                 append_log(method_log, message)
                 with log_lock:
                     append_log(root_log, "{}{}\n".format(log_prefix, message))
+                stages.start(stage_id)
+                stages.finish(stage_id, "done", detail="没有达到阈值的 contig")
                 continue
+            stages.start(stage_id, detail=evaluation_label)
             run_script(
                 "run_quast.py",
                 [
@@ -270,16 +301,14 @@ def run_assembler(
                 stream_lock=log_lock,
                 log_prefix=log_prefix,
             )
-        with log_lock:
-            append_log(root_log, "{}Method complete".format(log_prefix))
-        return assembler, True
-    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
-        message = "ERROR: {} (see {})".format(error, method_log)
-        append_log(method_log, message)
-        with log_lock:
-            append_log(root_log, "{}{}\n".format(log_prefix, message))
-        print("{}{}".format(log_prefix, message), file=sys.stderr)
-        return assembler, False
+            stages.finish(stage_id)
+        except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+            stages.finish(stage_id, "failed", detail=str(error))
+            _record_method_error(error, method_log, root_log, log_lock, log_prefix)
+            return assembler, False
+    with log_lock:
+        append_log(root_log, "{}Method complete".format(log_prefix))
+    return assembler, True
 
 
 def merge_method_versions(
@@ -335,7 +364,9 @@ def main() -> int:
 
     filtered_r1 = outdir / "fastp" / "{}_R1.fastq.gz".format(args.sample)
     filtered_r2 = outdir / "fastp" / "{}_R2.fastq.gz".format(args.sample)
+    stages = StageRecord(outdir / "stages.json", list(args.assembler))
     try:
+        stages.start("fastp")
         run_script(
             "run_fastp.py",
             [
@@ -352,6 +383,7 @@ def main() -> int:
             versions_path,
             thread_count=cpu_count,
         )
+        stages.finish("fastp")
 
         log_dir = outdir / "logs"
         log_lock = threading.Lock()
@@ -367,6 +399,7 @@ def main() -> int:
                 args.spades_careful,
                 log_path,
                 log_lock,
+                stages,
             )
             outcomes[name] = succeeded
 
@@ -378,7 +411,15 @@ def main() -> int:
             assembler for assembler in args.assembler if not outcomes.get(assembler)
         ]
         if successful:
+            stages.start("comparison")
             run_summary(outdir, successful, log_path)
+            stages.finish("comparison")
+        else:
+            stages.finish(
+                "comparison",
+                "done",
+                detail="没有成功的组装方法，未写比较汇总",
+            )
         if failed:
             return report_script_error(
                 RuntimeError(
@@ -387,6 +428,7 @@ def main() -> int:
                 log_path,
             )
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+        stages.fail_running(str(error))
         return report_script_error(error, log_path)
 
     print("Pipeline complete: {}".format(outdir))

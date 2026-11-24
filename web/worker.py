@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
+import errno
 import fcntl
 import json
 import os
+import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
 import tarfile
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from web.app import create_app
+from web.app import append_job_log, contained_path, create_app
 
 
 @contextmanager
@@ -32,33 +36,192 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def recover_interrupted_jobs(database: Path) -> None:
+TERM_GRACE_SECONDS = 5.0
+FINAL_CONTIGS = {
+    "spades": "contigs.fasta",
+    "unicycler": "assembly.fasta",
+    "shovill": "contigs.fa",
+    "megahit": "final.contigs.fa",
+}
+INCOMPLETE_TEMP_DIRS = {
+    "spades": ("tmp", "corrected", "misc"),
+    "unicycler": ("spades_output", "read_correction", "pilon_polish"),
+    "shovill": ("tmp",),
+    "megahit": ("tmp", "intermediate_contigs"),
+}
+
+
+def signal_group(pgid: int, sig: int) -> None:
+    try:
+        os.killpg(pgid, sig)
+    except ProcessLookupError:
+        return
+
+
+def stop_process_group(process: subprocess.Popen, grace_seconds: float = TERM_GRACE_SECONDS) -> int | None:
+    if process.poll() is not None:
+        return process.returncode
+    try:
+        pgid = os.getpgid(process.pid)
+    except ProcessLookupError:
+        try:
+            return process.wait(timeout=grace_seconds)
+        except subprocess.TimeoutExpired:
+            return process.poll()
+    signal_group(pgid, signal.SIGTERM)
+    try:
+        return process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        signal_group(pgid, signal.SIGKILL)
+        try:
+            return process.wait(timeout=grace_seconds)
+        except subprocess.TimeoutExpired:
+            return process.poll()
+
+
+def stop_pid_group(pid: int, grace_seconds: float = TERM_GRACE_SECONDS) -> None:
+    try:
+        os.kill(pid, 0)
+        pgid = os.getpgid(pid)
+    except ProcessLookupError:
+        return
+    if pgid != pid:
+        return
+    signal_group(pgid, signal.SIGTERM)
+    deadline = time.monotonic() + grace_seconds
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    signal_group(pgid, signal.SIGKILL)
+
+
+def remove_incomplete_tool_temp(pipeline_output_dir: Path) -> None:
+    assemblies = pipeline_output_dir / "assemblies"
+    if not assemblies.is_dir():
+        return
+    root = assemblies.resolve()
+    for method, final_name in FINAL_CONTIGS.items():
+        method_dir = assemblies / method
+        if not method_dir.is_dir() or method_dir.is_symlink():
+            continue
+        if (method_dir / final_name).is_file():
+            continue
+        for name in INCOMPLETE_TEMP_DIRS[method]:
+            target = method_dir / name
+            if not target.is_dir() or target.is_symlink():
+                continue
+            resolved = target.resolve()
+            if root not in resolved.parents:
+                continue
+            shutil.rmtree(resolved)
+
+
+def cancellation_requested(database: Path, job_id: str) -> bool:
+    with connect(database) as db:
+        row = db.execute(
+            "SELECT cancel_requested, status FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+    return bool(row and (row["cancel_requested"] or row["status"] == "cancelling"))
+
+
+def mark_cancelling(database: Path, job_id: str) -> None:
     with connect(database) as db:
         db.execute(
-            "UPDATE jobs SET status = 'failed', "
-            "error = 'Worker stopped while this job was running; submit a new job.', "
-            "updated_at = ?, completed_at = ? WHERE status = 'running'",
-            (now(), now()),
+            "UPDATE jobs SET status = 'cancelling', updated_at = ? "
+            "WHERE id = ? AND status = 'running'",
+            (now(), job_id),
         )
+
+
+def set_worker_pid(database: Path, job_id: str, pid: int | None) -> None:
+    with connect(database) as db:
+        db.execute(
+            "UPDATE jobs SET worker_pid = ?, updated_at = ? WHERE id = ?",
+            (pid, now(), job_id),
+        )
+
+
+def finalize_cancelled(database: Path, job_id: str, log_path: Path | None, pipeline_output_dir: Path | None) -> None:
+    if pipeline_output_dir is not None:
+        try:
+            remove_incomplete_tool_temp(pipeline_output_dir)
+        except OSError as error:
+            if log_path is not None:
+                append_job_log(log_path, "Could not remove incomplete tool temp: {}".format(error))
+    with connect(database) as db:
+        updated = db.execute(
+            "UPDATE jobs SET status = 'cancelled', error = NULL, worker_pid = NULL, "
+            "updated_at = ?, completed_at = ? "
+            "WHERE id = ? AND status IN ('running', 'cancelling')",
+            (now(), now(), job_id),
+        )
+        changed = updated.rowcount == 1
+    if changed and log_path is not None:
+        append_job_log(log_path, "STATUS: cancelled")
+
+
+def recover_interrupted_jobs(database: Path) -> None:
+    with connect(database) as db:
+        rows = db.execute(
+            "SELECT id, status, cancel_requested, worker_pid, log_path FROM jobs "
+            "WHERE status IN ('running', 'cancelling')"
+        ).fetchall()
+    for row in rows:
+        if row["worker_pid"]:
+            stop_pid_group(int(row["worker_pid"]), grace_seconds=2)
+    timestamp = now()
+    with connect(database) as db:
+        for row in rows:
+            if row["status"] == "cancelling" or row["cancel_requested"]:
+                db.execute(
+                    "UPDATE jobs SET status = 'cancelled', worker_pid = NULL, "
+                    "updated_at = ?, completed_at = ? "
+                    "WHERE id = ? AND status IN ('running', 'cancelling')",
+                    (timestamp, timestamp, row["id"]),
+                )
+                append_job_log(row["log_path"], "STATUS: cancelled")
+            else:
+                db.execute(
+                    "UPDATE jobs SET status = 'failed', worker_pid = NULL, "
+                    "error = 'Worker stopped while this job was running; submit a new job.', "
+                    "updated_at = ?, completed_at = ? WHERE id = ? AND status = 'running'",
+                    (timestamp, timestamp, row["id"]),
+                )
 
 
 def claim_next_job(database: Path):
     with connect(database) as db:
         db.execute("BEGIN IMMEDIATE")
+        timestamp = now()
+        pending = db.execute(
+            "SELECT id, log_path FROM jobs WHERE status = 'queued' AND cancel_requested = 1"
+        ).fetchall()
+        for row in pending:
+            db.execute(
+                "UPDATE jobs SET status = 'cancelled', updated_at = ?, completed_at = ? "
+                "WHERE id = ? AND status = 'queued'",
+                (timestamp, timestamp, row["id"]),
+            )
+            append_job_log(row["log_path"], "STATUS: cancelled")
         job = db.execute(
-            "SELECT * FROM jobs WHERE status = 'queued' "
+            "SELECT * FROM jobs WHERE status = 'queued' AND cancel_requested = 0 "
             "ORDER BY sequence ASC LIMIT 1"
         ).fetchone()
         if job is None:
             db.commit()
             return None
-        timestamp = now()
-        db.execute(
+        updated = db.execute(
             "UPDATE jobs SET status = 'running', started_at = ?, updated_at = ? "
-            "WHERE id = ? AND status = 'queued'",
+            "WHERE id = ? AND status = 'queued' AND cancel_requested = 0",
             (timestamp, timestamp, job["id"]),
         )
         db.commit()
+        if updated.rowcount != 1:
+            return None
         return job
 
 
@@ -74,24 +237,46 @@ def update_job(database: Path, job_id: str, status: str, **fields) -> None:
         )
 
 
+def publish_directory(source: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    for child in list(source.iterdir()):
+        target = destination / child.name
+        try:
+            child.replace(target)
+        except OSError as error:
+            if error.errno != errno.EXDEV:
+                raise
+            shutil.move(str(child), str(target))
+
+
 def process_next_job(app) -> bool:
     job = claim_next_job(app.config["DATABASE"])
     if job is None:
         return False
 
-    output_dir = Path(job["output_dir"])
-    pipeline_output_dir = output_dir / "outputs"
-    log_path = Path(job["log_path"])
+    data_root = app.config["DATA_ROOT"]
+    log_path = None
+    pipeline_output_dir = None
+    cancelled = False
     try:
-        pipeline_output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = contained_path(data_root, job["output_dir"])
+        log_path = contained_path(data_root, job["log_path"])
+        input_r1 = contained_path(data_root, job["input_r1"])
+        input_r2 = contained_path(data_root, job["input_r2"])
+        job_id = str(uuid.UUID(str(job["id"])))
+        work_dir = output_dir.parent / "work"
+        publish = output_dir.name == "output" and work_dir.is_dir()
+        pipeline_output_dir = work_dir if publish else output_dir / "outputs"
+        if not publish:
+            pipeline_output_dir.mkdir(parents=True, exist_ok=True)
         assemblers = json.loads(job["assemblers"])
         command = [
             sys.executable,
             str(app.config["PIPELINE_PATH"]),
             "--r1",
-            job["input_r1"],
+            str(input_r1),
             "--r2",
-            job["input_r2"],
+            str(input_r2),
             "--outdir",
             str(pipeline_output_dir),
             "--sample",
@@ -104,30 +289,64 @@ def process_next_job(app) -> bool:
         if "spades" in assemblers and job["spades_careful"]:
             command.append("--spades-careful")
 
+        returncode = None
         with log_path.open("a", encoding="utf-8") as log_file:
-            log_file.write(
-                "Web job {}\nSTATUS: running\nCOMMAND: {}\n".format(job["id"], command)
+            if cancellation_requested(app.config["DATABASE"], job["id"]):
+                mark_cancelling(app.config["DATABASE"], job["id"])
+                log_file.write("STATUS: cancelling\n")
+                log_file.flush()
+                cancelled = True
+            else:
+                log_file.write(
+                    "Web job {}\nSTATUS: running\nCOMMAND: {}\n".format(job["id"], command)
+                )
+                log_file.flush()
+                process = subprocess.Popen(
+                    command,
+                    cwd=Path(app.config["PIPELINE_PATH"]).resolve().parent,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    env=os.environ.copy(),
+                    start_new_session=True,
+                )
+                set_worker_pid(app.config["DATABASE"], job["id"], process.pid)
+                while process.poll() is None:
+                    if cancellation_requested(app.config["DATABASE"], job["id"]):
+                        mark_cancelling(app.config["DATABASE"], job["id"])
+                        log_file.write("STATUS: cancelling\n")
+                        log_file.flush()
+                        stop_process_group(process)
+                        cancelled = True
+                        break
+                    time.sleep(0.2)
+                returncode = process.returncode
+        if cancelled or (
+            returncode not in (0, None) and cancellation_requested(app.config["DATABASE"], job["id"])
+        ):
+            if not cancelled:
+                mark_cancelling(app.config["DATABASE"], job["id"])
+            finalize_cancelled(
+                app.config["DATABASE"], job["id"], log_path, pipeline_output_dir
             )
-            log_file.flush()
-            result = subprocess.run(
-                command,
-                cwd=Path(app.config["PIPELINE_PATH"]).resolve().parent,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                check=False,
-                env=os.environ.copy(),
-            )
+            return True
+
         partial_output_available = (
             pipeline_output_dir / "comparison.tsv"
         ).is_file()
-        if result.returncode and not partial_output_available:
-            raise RuntimeError("Pipeline exited with status {}".format(result.returncode))
+        if returncode and not partial_output_available:
+            raise RuntimeError("Pipeline exited with status {}".format(returncode))
 
-        archive_path = app.config["DATA_ROOT"] / "downloads" / "{}.tar.gz".format(job["id"])
+        archived_dir = pipeline_output_dir
+        if publish:
+            publish_directory(pipeline_output_dir, output_dir)
+            archived_dir = output_dir
+        archive_path = contained_path(
+            data_root, app.config["ARCHIVE_ROOT"] / "{}.tar.gz".format(job_id)
+        )
         archive_path.parent.mkdir(parents=True, exist_ok=True)
         with tarfile.open(archive_path, "w:gz") as archive:
             archive.add(
-                pipeline_output_dir,
+                archived_dir,
                 arcname="results",
                 recursive=True,
                 filter=lambda member: None if member.issym() else member,
@@ -135,24 +354,32 @@ def process_next_job(app) -> bool:
         update_job(
             app.config["DATABASE"],
             job["id"],
-            "succeeded" if result.returncode == 0 else "failed",
+            "succeeded" if returncode == 0 else "failed",
             archive_path=str(archive_path),
+            worker_pid=None,
             error=(
                 None
-                if result.returncode == 0
+                if returncode == 0
                 else "Some selected methods failed; download available partial results and review the job log."
             ),
         )
     except Exception as error:
+        if cancelled or cancellation_requested(app.config["DATABASE"], job["id"]):
+            finalize_cancelled(
+                app.config["DATABASE"], job["id"], log_path, pipeline_output_dir
+            )
+            return True
         try:
-            with log_path.open("a", encoding="utf-8") as log_file:
-                log_file.write("\nWEB WORKER ERROR: {}\n".format(error))
+            if log_path is not None:
+                with log_path.open("a", encoding="utf-8") as log_file:
+                    log_file.write("\nWEB WORKER ERROR: {}\n".format(error))
         except OSError as log_error:
             print("Could not append job error to {}: {}".format(log_path, log_error), file=sys.stderr)
         update_job(
             app.config["DATABASE"],
             job["id"],
             "failed",
+            worker_pid=None,
             error="The analysis failed. Review the job log for details.",
         )
     return True

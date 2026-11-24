@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>{{ job.sample }} · 任务监控 · 微生物 NGS 数据分析系统</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='job.js') }}" defer></script>
+</head>
+<body class="workbench">
+  {% include "_topbar.html" %}
+  {% set status_labels = {"queued": "排队中", "running": "分析中", "cancelling": "取消中", "cancelled": "已取消", "succeeded": "已完成", "failed": "失败"} %}
+  {% set state_labels = {"waiting": "等待", "running": "进行中", "done": "完成", "failed": "失败"} %}
+  <main class="dashboard monitor-page" id="job-monitor" data-job-id="{{ job.id }}">
+    <header class="monitor-intro">
+      <div>
+        <p class="eyebrow">LIVE TASK / {{ job.id[:8] }}</p>
+        <p class="monitor-sample">{{ job.sample }} · {{ job.assemblers | join(" / ") }}</p>
+        <p class="monitor-kicker">当前软件</p>
+        <h1 id="current-software">{{ progress.current.software or "尚未开始" }}</h1>
+      </div>
+      <a class="monitor-back" href="{{ url_for('dashboard') }}">返回工作台</a>
+    </header>
+
+    <dl class="monitor-facts">
+      <div>
+        <dt>任务状态</dt>
+        <dd><span class="status-pill status-{{ job.status }}" id="job-status">{{ status_labels.get(job.status, job.status) }}</span></dd>
+      </div>
+      <div>
+        <dt>当前阶段</dt>
+        <dd id="current-stage">{{ progress.current.label or ("等待开始" if job.status == "queued" else "尚未进入阶段") }}</dd>
+      </div>
+      <div>
+        <dt>阶段进度</dt>
+        <dd id="stage-progress">{% if progress.current.percent is not none %}{{ progress.current.percent }}%{% else %}未报告{% endif %}</dd>
+      </div>
+      <div>
+        <dt>已运行时间</dt>
+        <dd id="elapsed"{% if progress.elapsed_seconds is not none %} data-elapsed-seconds="{{ progress.elapsed_seconds }}"{% endif %}>{{ progress.elapsed_label }}</dd>
+      </div>
+      <div>
+        <dt>最后更新</dt>
+        <dd><time id="stage-updated" datetime="{{ progress.updated_at or '' }}">{{ progress.updated_at or "—" }}</time></dd>
+      </div>
+    </dl>
+    <p id="job-error" class="monitor-error"{% if not job.error %} hidden{% endif %}>{{ job.error or "" }}</p>
+
+    <section class="monitor-rail-section" aria-labelledby="rail-title">
+      <div class="monitor-section-head">
+        <h2 id="rail-title">阶段</h2>
+        <p>按本次选择的顺序执行。没有可靠比例时，只显示阶段状态。</p>
+      </div>
+      <ol class="stage-rail" id="stage-rail">
+        {% for group in progress.groups %}
+        <li class="stage-method state-{{ group.state }}" data-method="{{ group.id }}">
+          <span class="stage-node" aria-hidden="true"></span>
+          <div>
+            <div class="stage-method-head">
+              <strong>{{ group.title }}</strong>
+              <span class="stage-state">{{ state_labels.get(group.state, group.state) }}</span>
+            </div>
+            <ol class="stage-substeps">
+              {% for step in group.steps %}
+              <li class="stage-step state-{{ step.state }}" data-stage-id="{{ step.id }}">
+                <span class="stage-step-label">{{ step.label }}</span>
+                <span class="stage-step-meta">
+                  {% if step.percent is not none %}<span class="stage-percent">{{ step.percent }}%</span>{% endif %}
+                  <span class="stage-state">{{ state_labels.get(step.state, step.state) }}</span>
+                </span>
+                {% if step.detail %}<small>{{ step.detail }}</small>{% endif %}
+              </li>
+              {% endfor %}
+            </ol>
+          </div>
+        </li>
+        {% endfor %}
+      </ol>
+    </section>
+
+    <div class="monitor-actions">
+      <button type="button" class="button button-cancel" id="cancel-job"{% if job.status not in ("queued", "running") %} hidden{% endif %}>取消任务</button>
+      <a id="result-download" class="button button-download" {% if not job.archive_available %}hidden{% endif %}
+         href="{{ url_for('download_job', job_id=job.id) }}">
+        {{ "下载部分结果" if job.status in ("failed", "cancelled") else "下载分析结果" }}
+      </a>
+      <a class="monitor-log-link" href="{{ url_for('download_job_log', job_id=job.id) }}">下载运行日志</a>
+    </div>
+    <p id="partial-note" class="monitor-note"{% if job.status != "cancelled" or job.archive_available %} hidden{% endif %}>运行日志已保留，结果不完整。</p>
+
+    <section class="monitor-log" aria-labelledby="log-title">
+      <div class="monitor-section-head">
+        <h2 id="log-title">运行日志</h2>
+        <p>日志保留命令和输出。阶段是否在跑，以上方记录为准。</p>
+      </div>
+      <pre id="job-log" class="job-log" aria-live="polite"></pre>
+    </section>
+  </main>
+</body>
+</html>

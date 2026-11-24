@@ -1,9 +1,13 @@
 <header class="topbar">
-  <a class="brand" href="{{ url_for('module_index') }}" aria-label="微生物 NGS 数据分析系统首页">
+  <a class="brand" href="{{ url_for('overview') }}" aria-label="微生物 NGS 数据分析系统首页">
     <span class="brand-icon">MN<i></i></span>
     <span>MICROBIAL <b>NGS</b></span>
   </a>
   <nav class="site-nav" aria-label="主要导航">
+    <a class="site-nav-link{% if active_page == 'overview' %} is-active{% endif %}"
+       href="{{ url_for('overview') }}"{% if active_page == 'overview' %} aria-current="page"{% endif %}>
+      <span class="nav-full">总览</span><span class="nav-short">总览</span>
+    </a>
     <a class="site-nav-link{% if active_page == 'modules' %} is-active{% endif %}"
        href="{{ url_for('module_index') }}"{% if active_page == 'modules' %} aria-current="page"{% endif %}>
       <span class="nav-full">分析模块</span><span class="nav-short">模块</span>

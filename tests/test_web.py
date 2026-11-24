@@ -1,10 +1,16 @@
+import hashlib
 import io
 import json
 import os
 import re
+import signal
 import sqlite3
+import subprocess
+import sys
 import tarfile
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import closing
 from pathlib import Path
@@ -12,16 +18,20 @@ from unittest.mock import patch
 
 os.environ["ASSEMBLY_WEB_AUTOCREATE"] = "0"
 
+_PROCESS_TEMP = tempfile.gettempdir()
+
 from werkzeug.security import generate_password_hash
 
+import run_pipeline
 from scripts.common import cpu_share
+from scripts.stage_record import StageRecord
 from web.app import SCHEMA, create_app, elapsed_seconds, format_duration
-from web.worker import process_next_job
+from web.worker import process_next_job, stop_process_group
 
 
 class WebWorkbenchTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        self.temp = tempfile.TemporaryDirectory(dir=_PROCESS_TEMP)
         self.root = Path(self.temp.name)
         self.pipeline = self.root / "fake_pipeline.py"
         self.pipeline.write_text(
@@ -62,7 +72,7 @@ class WebWorkbenchTests(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.headers["Location"], "/modules")
+        self.assertEqual(response.headers["Location"], "/overview")
         dashboard = client.get("/")
         token = re.search(rb'name="csrf-token" content="([^"]+)"', dashboard.data)
         self.assertIsNotNone(token)
@@ -87,10 +97,21 @@ class WebWorkbenchTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/jobs").status_code, 401)
         self.assertEqual(self.client.get("/history").status_code, 302)
         self.assertEqual(self.client.get("/modules").status_code, 302)
+        self.assertEqual(self.client.get("/overview").status_code, 302)
         login_page = self.client.get("/login")
         self.assertIn(b'id="toggle-password"', login_page.data)
         self.assertIn('aria-label="显示密码"'.encode(), login_page.data)
         token = self.login(self.client)
+        overview = self.client.get("/overview")
+        self.assertIn("最近分析".encode(), overview.data)
+        self.assertIn("先看这台机器".encode(), overview.data)
+        self.assertIn("数据盘".encode(), overview.data)
+        self.assertIn("细菌基因组组装".encode(), overview.data)
+        self.assertNotIn(b"E.coli_001", overview.data)
+        self.assertNotIn(b"Genome QC", overview.data)
+        host = self.client.get("/api/host").json["host"]
+        self.assertTrue(host["disk"]["ok"])
+        self.assertIn(host["disk"]["total"].encode(), overview.data)
         module_page = self.client.get("/modules")
         self.assertIn("微生物 NGS".encode(), module_page.data)
         self.assertIn("可用分析模块".encode(), module_page.data)
@@ -116,6 +137,15 @@ class WebWorkbenchTests(unittest.TestCase):
         self.assertEqual(queued["threads"], cpu_share())
         self.assertNotIn("memory", queued)
         self.assertEqual(self.client.get("/api/jobs/{}/log".format(job_id)).status_code, 200)
+        data_root = Path(self.app.config["DATA_ROOT"])
+        self.assertTrue((data_root / "jobs" / job_id / "input" / "R1.fastq.gz").is_file())
+        self.assertTrue((data_root / "jobs" / job_id / "input" / "R2.fastq.gz").is_file())
+        self.assertFalse((data_root / "uploads" / job_id).exists())
+        self.assertFalse((data_root / "uploads" / "incoming" / job_id).exists())
+        self.assertFalse((data_root / "uploads" / "validated" / job_id).exists())
+        self.assertEqual(self.app.config["STAGING_ROOT"], data_root / "uploads" / "chunks")
+        self.assertTrue((data_root / "reports").is_dir())
+        self.assertEqual(self.app.config["DATABASE"], data_root / "database" / "jobs.sqlite3")
 
         history = self.client.get("/history")
         self.assertIn("isolate_17".encode(), history.data)
@@ -137,6 +167,8 @@ class WebWorkbenchTests(unittest.TestCase):
         bob_token = self.login(bob, "bob", "bob-password")
         self.assertEqual(bob.get("/api/jobs").json["jobs"], [])
         self.assertNotIn("isolate_17".encode(), bob.get("/history").data)
+        self.assertIn("isolate_17".encode(), self.client.get("/overview").data)
+        self.assertNotIn("isolate_17".encode(), bob.get("/overview").data)
         self.assertEqual(bob.get("/api/jobs/{}".format(job_id)).status_code, 404)
         self.assertEqual(bob.get("/api/jobs/{}/download".format(job_id)).status_code, 404)
         self.assertEqual(
@@ -157,11 +189,12 @@ class WebWorkbenchTests(unittest.TestCase):
             history.data,
         )
         self.assertNotIn("等待开始".encode(), history.data)
-        result_dir = Path(self.app.config["RESULT_ROOT"]) / job_id
         self.assertEqual(
-            (result_dir / "outputs" / "assemblers.txt").read_text(encoding="utf-8"),
+            (data_root / "jobs" / job_id / "output" / "assemblers.txt").read_text(encoding="utf-8"),
             "spades,megahit",
         )
+        self.assertTrue((data_root / "archive" / "{}.tar.gz".format(job_id)).is_file())
+        self.assertTrue((data_root / "jobs" / job_id / "logs" / "job.log").is_file())
         download = self.client.get("/api/jobs/{}/download".format(job_id))
         self.assertEqual(download.status_code, 200)
         self.assertIn("attachment", download.headers["Content-Disposition"])
@@ -306,12 +339,12 @@ class WebWorkbenchTests(unittest.TestCase):
     def test_existing_database_migrates_module_id(self):
         data_root = self.root / "legacy-data"
         data_root.mkdir()
-        database = data_root / "jobs.sqlite3"
+        legacy_database = data_root / "jobs.sqlite3"
         legacy_schema = SCHEMA.replace(
             "    module_id TEXT NOT NULL DEFAULT 'bacterial-assembly',\n", ""
         ).replace("    threads INTEGER NOT NULL,\n", "    threads INTEGER NOT NULL,\n    memory INTEGER NOT NULL,\n")
         self.assertNotEqual(legacy_schema, SCHEMA)
-        with closing(sqlite3.connect(database)) as db:
+        with closing(sqlite3.connect(legacy_database)) as db:
             db.executescript(legacy_schema)
             db.execute(
                 "INSERT INTO jobs (id, owner, status, assemblers, threads, memory, "
@@ -328,6 +361,9 @@ class WebWorkbenchTests(unittest.TestCase):
                 "PIPELINE_PATH": self.pipeline,
             }
         )
+        database = data_root / "database" / "jobs.sqlite3"
+        self.assertFalse(legacy_database.exists())
+        self.assertTrue(database.is_file())
         with closing(sqlite3.connect(database)) as db:
             module_id = db.execute(
                 "SELECT module_id FROM jobs WHERE id = 'legacy-job'"
@@ -354,6 +390,164 @@ class WebWorkbenchTests(unittest.TestCase):
             response = self.submit_job(self.client, token, ("spades",))
         self.assertEqual(response.status_code, 507)
 
+    def test_job_monitor_keeps_status_and_selected_stages_apart(self):
+        token = self.login(self.client)
+        response = self.submit_job(self.client, token, ("shovill", "megahit"))
+        self.assertEqual(response.status_code, 202)
+        job_id = response.json["job"]["id"]
+
+        queued = self.client.get("/api/jobs/{}".format(job_id)).json["job"]
+        self.assertEqual(queued["status"], "queued")
+        self.assertEqual(queued["progress"]["status"], "queued")
+        self.assertIsNone(queued["progress"]["current"]["id"])
+        self.assertIsNone(queued["progress"]["current"]["software"])
+        self.assertIsNone(queued["progress"]["current"]["percent"])
+        self.assertIsNone(queued["progress"]["elapsed_seconds"])
+        self.assertNotIn("overall_percent", queued)
+        self.assertNotIn("overall_percent", queued["progress"])
+        queued_ids = [stage["id"] for stage in queued["progress"]["stages"]]
+        self.assertEqual(
+            queued_ids,
+            [
+                "fastp",
+                "shovill",
+                "shovill:quast:original",
+                "shovill:quast:gt500",
+                "shovill:quast:gt1000",
+                "megahit",
+                "megahit:quast:original",
+                "megahit:quast:gt500",
+                "megahit:quast:gt1000",
+                "comparison",
+            ],
+        )
+        self.assertNotIn("spades", queued_ids)
+        self.assertNotIn("unicycler", queued_ids)
+        self.assertTrue(all(stage["state"] == "waiting" for stage in queued["progress"]["stages"]))
+        self.assertTrue(all(stage["percent"] is None for stage in queued["progress"]["stages"]))
+
+        stage_path = (
+            Path(self.app.config["DATA_ROOT"]) / "jobs" / job_id / "work" / "stages.json"
+        )
+        record = StageRecord(stage_path, ["shovill", "megahit"])
+        record.finish("fastp")
+        record.finish("shovill")
+        for evaluation in ("original", "gt500", "gt1000"):
+            record.finish("shovill:quast:{}".format(evaluation))
+        record.start("megahit")
+        started = "2026-01-01T00:00:00Z"
+        with closing(sqlite3.connect(self.app.config["DATABASE"])) as database:
+            database.execute(
+                "UPDATE jobs SET status = 'running', started_at = ?, updated_at = ? WHERE id = ?",
+                (started, started, job_id),
+            )
+            database.commit()
+
+        running = self.client.get("/api/jobs/{}".format(job_id)).json["job"]
+        self.assertEqual(running["status"], "running")
+        self.assertEqual(running["progress"]["status"], "running")
+        self.assertEqual(running["progress"]["current"]["id"], "megahit")
+        self.assertEqual(running["progress"]["current"]["software"], "MEGAHIT")
+        self.assertEqual(running["progress"]["current"]["state"], "running")
+        self.assertIsNone(running["progress"]["current"]["percent"])
+        megahit = next(
+            stage for stage in running["progress"]["stages"] if stage["id"] == "megahit"
+        )
+        self.assertEqual(megahit["state"], "running")
+        self.assertIsNone(megahit["percent"])
+        self.assertGreater(running["progress"]["elapsed_seconds"], 0)
+        running_ids = [stage["id"] for stage in running["progress"]["stages"]]
+        self.assertNotIn("spades", running_ids)
+        self.assertNotIn("unicycler", running_ids)
+
+        page = self.client.get("/jobs/{}".format(job_id))
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("当前软件".encode(), page.data)
+        self.assertIn(b"MEGAHIT", page.data)
+        self.assertIn("分析中".encode(), page.data)
+        self.assertIn("未报告".encode(), page.data)
+        self.assertIn("任务状态".encode(), page.data)
+        self.assertIn("当前阶段".encode(), page.data)
+        self.assertIn(b'data-stage-id="shovill"', page.data)
+        self.assertIn(b'data-stage-id="megahit"', page.data)
+        self.assertIn(b'data-stage-id="comparison"', page.data)
+        self.assertNotIn(b'data-stage-id="spades"', page.data)
+        self.assertNotIn(b'data-stage-id="unicycler"', page.data)
+        self.assertNotIn(b"<progress", page.data)
+        self.assertNotIn("取消".encode(), page.data)
+        self.assertIn(b'id="job-log"', page.data)
+        self.assertIn("/jobs/{}".format(job_id).encode(), self.client.get("/history").data)
+        self.assertIn("查看进度".encode(), self.client.get("/history").data)
+        self.assertIn(b'id="monitor-link"', self.client.get("/").data)
+
+        bob = self.app.test_client()
+        self.login(bob, "bob", "bob-password")
+        self.assertEqual(bob.get("/api/jobs/{}".format(job_id)).status_code, 404)
+        self.assertEqual(bob.get("/jobs/{}".format(job_id)).status_code, 404)
+
+    def test_pipeline_stage_record_follows_selected_assemblers(self):
+        outdir = self.root / "pipeline-stages"
+        r1 = self.root / "stage_R1.fastq"
+        r2 = self.root / "stage_R2.fastq"
+        r1.write_text("@r\nAC\n+\nII\n", encoding="utf-8")
+        r2.write_text("@r\nTG\n+\nII\n", encoding="utf-8")
+        argv = [
+            "run_pipeline.py",
+            "--r1",
+            str(r1),
+            "--r2",
+            str(r2),
+            "--outdir",
+            str(outdir),
+            "--sample",
+            "stage_sample",
+            "--assembler",
+            "shovill",
+            "--assembler",
+            "megahit",
+        ]
+
+        def fake_run_script(script, arguments, *args, **kwargs):
+            if script == "run_megahit.py":
+                raise subprocess.CalledProcessError(1, [script])
+
+        with patch("run_pipeline.run_script", side_effect=fake_run_script), patch(
+            "run_pipeline.run_contig_filter"
+        ), patch("run_pipeline.run_summary"), patch(
+            "run_pipeline.memory_share_gib", return_value=1
+        ), patch(
+            "run_pipeline.logical_cpu_count", return_value=2
+        ), patch("sys.argv", argv):
+            self.assertEqual(run_pipeline.main(), 1)
+
+        record = json.loads((outdir / "stages.json").read_text(encoding="utf-8"))
+        by_id = {stage["id"]: stage for stage in record["stages"]}
+        self.assertEqual(
+            list(by_id),
+            [
+                "fastp",
+                "shovill",
+                "shovill:quast:original",
+                "shovill:quast:gt500",
+                "shovill:quast:gt1000",
+                "megahit",
+                "megahit:quast:original",
+                "megahit:quast:gt500",
+                "megahit:quast:gt1000",
+                "comparison",
+            ],
+        )
+        self.assertNotIn("spades", by_id)
+        self.assertNotIn("unicycler", by_id)
+        self.assertEqual(by_id["fastp"]["state"], "done")
+        self.assertEqual(by_id["shovill"]["state"], "done")
+        self.assertEqual(by_id["megahit"]["state"], "failed")
+        self.assertEqual(by_id["megahit"]["software"], "MEGAHIT")
+        self.assertIsNone(by_id["megahit"]["percent"])
+        self.assertEqual(by_id["megahit:quast:original"]["state"], "waiting")
+        self.assertTrue(all(stage["percent"] is None for stage in record["stages"]))
+        self.assertEqual(by_id["comparison"]["state"], "done")
+
     def test_configured_accounts_are_required(self):
         users_file = self.root / "users.json"
         users_file.write_text('{"users":{}}', encoding="utf-8")
@@ -365,6 +559,537 @@ class WebWorkbenchTests(unittest.TestCase):
                     "DATA_ROOT": self.root / "other",
                 }
             )
+
+    def use_small_chunks(self):
+        self.app.config["UPLOAD_CHUNK_SIZE"] = 8
+
+    def post_upload(self, client, token, filename, role, size):
+        return client.post(
+            "/api/uploads",
+            json={"filename": filename, "size": size, "role": role},
+            headers={"X-CSRF-Token": token},
+        )
+
+    def put_chunk(self, client, token, upload_id, index, payload):
+        return client.put(
+            "/api/uploads/{}/chunks/{}".format(upload_id, index),
+            data=payload,
+            headers={"X-CSRF-Token": token},
+            content_type="application/octet-stream",
+        )
+
+    def store_chunks(self, client, token, filename, role, payload):
+        self.use_small_chunks()
+        created = self.post_upload(client, token, filename, role, len(payload))
+        self.assertEqual(created.status_code, 201, created.get_json())
+        upload = created.json["upload"]
+        chunk_size = upload["chunk_size"]
+        for index in range(upload["chunk_count"]):
+            piece = payload[index * chunk_size:(index + 1) * chunk_size]
+            stored = self.put_chunk(client, token, upload["id"], index, piece)
+            self.assertEqual(stored.status_code, 200, stored.get_json())
+        return upload
+
+    def finish_upload(self, client, token, upload_id, digest):
+        return client.post(
+            "/api/uploads/{}/complete".format(upload_id),
+            json={"sha256": digest},
+            headers={"X-CSRF-Token": token},
+        )
+
+    def test_chunk_assemble_rejects_sha256_mismatch(self):
+        token = self.login(self.client)
+        payload = b"@r1\nACGTACGT\n+\nIIIIIIII\n"
+        upload = self.store_chunks(self.client, token, "reads_R1.fastq", "r1", payload)
+        rejected = self.finish_upload(self.client, token, upload["id"], "0" * 64)
+        self.assertEqual(rejected.status_code, 400)
+        self.assertIn("SHA-256", rejected.json["error"])
+        session_dir = self.app.config["STAGING_ROOT"] / upload["id"]
+        validated = self.app.config["UPLOAD_VALIDATED"] / upload["id"] / "read.fastq"
+        self.assertFalse(list(session_dir.glob("read.*")))
+        self.assertFalse(validated.exists())
+        self.assertTrue((session_dir / "chunks" / "00000000").is_file())
+        status = self.client.get("/api/uploads/{}".format(upload["id"]))
+        self.assertEqual(status.json["upload"]["status"], "failed")
+        self.assertIsNone(status.json["upload"]["sha256"])
+        self.assertFalse(any(self.app.config["JOBS_ROOT"].rglob("*.fastq")))
+        accepted = self.finish_upload(
+            self.client, token, upload["id"], hashlib.sha256(payload).hexdigest()
+        )
+        self.assertEqual(accepted.status_code, 200, accepted.get_json())
+        self.assertEqual(accepted.json["upload"]["status"], "completed")
+        self.assertEqual(accepted.json["upload"]["sha256"], hashlib.sha256(payload).hexdigest())
+        self.assertEqual(validated.read_bytes(), payload)
+        self.assertFalse(session_dir.exists())
+
+    def test_resume_skips_stored_chunks(self):
+        token = self.login(self.client)
+        self.use_small_chunks()
+        payload = b"ABCDEFGH1234"
+        created = self.post_upload(self.client, token, "reads_R1.fq.gz", "r1", len(payload))
+        upload_id = created.json["upload"]["id"]
+        first = self.put_chunk(self.client, token, upload_id, 0, payload[:8])
+        self.assertEqual(first.status_code, 200)
+        self.assertFalse(first.json["skipped"])
+        chunk_path = self.app.config["STAGING_ROOT"] / upload_id / "chunks" / "00000000"
+        modified = chunk_path.stat().st_mtime_ns
+        second = self.put_chunk(self.client, token, upload_id, 0, payload[:8])
+        self.assertEqual(second.status_code, 200)
+        self.assertTrue(second.json["skipped"])
+        self.assertEqual(chunk_path.stat().st_mtime_ns, modified)
+        self.assertEqual(chunk_path.read_bytes(), payload[:8])
+        self.assertEqual(second.json["upload"]["received"], [0])
+        tail = self.put_chunk(self.client, token, upload_id, 1, payload[8:])
+        self.assertEqual(tail.status_code, 200)
+        self.assertFalse(tail.json["skipped"])
+        done = self.finish_upload(
+            self.client, token, upload_id, hashlib.sha256(payload).hexdigest()
+        )
+        self.assertEqual(done.status_code, 200, done.get_json())
+        self.assertEqual(
+            (self.app.config["UPLOAD_VALIDATED"] / upload_id / "read.fq.gz").read_bytes(),
+            payload,
+        )
+        self.assertFalse((self.app.config["STAGING_ROOT"] / upload_id).exists())
+
+    def test_upload_rejects_path_traversal(self):
+        token = self.login(self.client)
+        outside = self.root / "escaped.fastq"
+        rejected = self.client.post(
+            "/api/uploads",
+            json={
+                "filename": "../escaped.fastq",
+                "size": 4,
+                "role": "r1",
+                "path": str(outside),
+            },
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(rejected.status_code, 400)
+        self.assertFalse(outside.exists())
+        self.assertFalse(list(self.app.config["DATA_ROOT"].rglob("escaped.fastq")))
+        missing = self.put_chunk(self.client, token, "not-a-uuid", 0, b"abcd")
+        self.assertEqual(missing.status_code, 404)
+        created = self.post_upload(self.client, token, "reads_R1.fastq", "r1", 4)
+        upload_id = created.json["upload"]["id"]
+        escaped = self.client.put(
+            "/api/uploads/{}/chunks/0?path=/etc/passwd".format(upload_id),
+            data=b"abcd",
+            headers={"X-CSRF-Token": token},
+            content_type="application/octet-stream",
+        )
+        self.assertEqual(escaped.status_code, 400)
+        self.assertFalse((self.app.config["STAGING_ROOT"] / upload_id / "chunks" / "00000000").exists())
+        paired = self.store_chunks(self.client, token, "reads_R2.fastq", "r2", b"AAAABBBBCCCC")
+        digest = hashlib.sha256(b"AAAABBBBCCCC").hexdigest()
+        self.assertEqual(self.finish_upload(self.client, token, paired["id"], digest).status_code, 200)
+        job = self.client.post(
+            "/api/jobs",
+            data={
+                "assembler": ["spades"],
+                "assembler_order": '["spades"]',
+                "sample": "isolate_17",
+                "r1_session": paired["id"],
+                "r2_session": paired["id"],
+                "input_r1": "/etc/passwd",
+            },
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(job.status_code, 400)
+        self.assertFalse(any(self.app.config["JOBS_ROOT"].rglob("passwd")))
+
+    def test_incomplete_upload_cannot_create_job(self):
+        token = self.login(self.client)
+        self.use_small_chunks()
+        pending = self.post_upload(self.client, token, "reads_R1.fastq", "r1", 12)
+        partial = self.store_chunks(self.client, token, "reads_R2.fastq.gz", "r2", b"AAAABBBBCCCC")
+        self.put_chunk(self.client, token, pending.json["upload"]["id"], 0, b"AAAAAAAA")
+        response = self.client.post(
+            "/api/jobs",
+            data={
+                "assembler": ["megahit"],
+                "assembler_order": '["megahit"]',
+                "sample": "isolate_17",
+                "r1_session": pending.json["upload"]["id"],
+                "r2_session": partial["id"],
+            },
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("不能开始分析", response.json["error"])
+        self.assertFalse(any(self.app.config["JOBS_ROOT"].rglob("*.fastq*")))
+        self.assertTrue(
+            (self.app.config["STAGING_ROOT"] / pending.json["upload"]["id"] / "chunks" / "00000000").is_file()
+        )
+        bob = self.app.test_client()
+        bob_token = self.login(bob, "bob", "bob-password")
+        self.assertEqual(
+            bob.get("/api/uploads/{}".format(pending.json["upload"]["id"])).status_code, 404
+        )
+        stolen = bob.post(
+            "/api/jobs",
+            data={
+                "assembler": ["megahit"],
+                "assembler_order": '["megahit"]',
+                "r1_session": pending.json["upload"]["id"],
+                "r2_session": partial["id"],
+            },
+            headers={"X-CSRF-Token": bob_token},
+        )
+        self.assertEqual(stolen.status_code, 404)
+
+    def test_completed_upload_can_create_job(self):
+        token = self.login(self.client)
+        page = self.client.get("/")
+        self.assertIn("等待上传".encode(), page.data)
+        self.assertIn("继续上传".encode(), page.data)
+        self.assertNotIn("可以开始分析".encode(), page.data)
+        left = b"@r1\nACGTAAAA\n+\nIIIIIIII\n"
+        right = b"@r2\nTGCAAAAA\n+\nIIIIIIII\n"
+        r1 = self.store_chunks(self.client, token, "reads_R1.fastq.gz", "r1", left)
+        r2 = self.store_chunks(self.client, token, "sample.fq", "r2", right)
+        self.assertEqual(
+            self.finish_upload(self.client, token, r1["id"], hashlib.sha256(left).hexdigest()).status_code,
+            200,
+        )
+        self.assertEqual(
+            self.finish_upload(self.client, token, r2["id"], hashlib.sha256(right).hexdigest()).status_code,
+            200,
+        )
+        response = self.client.post(
+            "/api/jobs",
+            data={
+                "assembler": ["spades"],
+                "assembler_order": '["spades"]',
+                "sample": "isolate_17",
+                "r1_session": r1["id"],
+                "r2_session": r2["id"],
+            },
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(response.status_code, 202, response.get_json())
+        job_id = response.json["job"]["id"]
+        input_dir = self.app.config["JOBS_ROOT"] / job_id / "input"
+        self.assertEqual((input_dir / "R1.fastq.gz").read_bytes(), left)
+        self.assertEqual((input_dir / "R2.fq").read_bytes(), right)
+        self.assertFalse((self.app.config["STAGING_ROOT"] / r1["id"]).exists())
+        self.assertFalse((self.app.config["STAGING_ROOT"] / r2["id"]).exists())
+        self.assertFalse((self.app.config["JOBS_ROOT"] / job_id / "output" / "R1.fastq.gz").exists())
+        again = self.client.post(
+            "/api/jobs",
+            data={
+                "assembler": ["spades"],
+                "assembler_order": '["spades"]',
+                "sample": "isolate_18",
+                "r1_session": r1["id"],
+                "r2_session": r2["id"],
+            },
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertIn(again.status_code, (400, 404))
+
+    def test_owner_can_cancel_queued_job_without_starting_it(self):
+        token = self.login(self.client)
+        response = self.submit_job(self.client, token, ("spades",))
+        job_id = response.json["job"]["id"]
+        job_dir = self.app.config["JOBS_ROOT"] / job_id
+        log_path = job_dir / "logs" / "job.log"
+        self.assertEqual(self.client.post("/api/jobs/{}/cancel".format(job_id)).status_code, 400)
+        self.assertEqual(self.client.get("/api/jobs/{}".format(job_id)).json["job"]["status"], "queued")
+        page = self.client.get("/jobs/{}".format(job_id))
+        self.assertIn("取消任务".encode(), page.data)
+        self.assertIn(b'id="cancel-job"', page.data)
+
+        bob = self.app.test_client()
+        bob_token = self.login(bob, "bob", "bob-password")
+        hidden = bob.post(
+            "/api/jobs/{}/cancel".format(job_id),
+            headers={"X-CSRF-Token": bob_token},
+        )
+        self.assertEqual(hidden.status_code, 404)
+
+        cancelled = self.client.post(
+            "/api/jobs/{}/cancel".format(job_id),
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertEqual(cancelled.json["job"]["status"], "cancelled")
+        self.assertFalse(process_next_job(self.app))
+        self.assertEqual(
+            self.client.get("/api/jobs/{}".format(job_id)).json["job"]["status"],
+            "cancelled",
+        )
+        self.assertTrue(log_path.is_file())
+        log_text = log_path.read_text(encoding="utf-8")
+        self.assertIn("STATUS: queued", log_text)
+        self.assertIn("STATUS: cancelled", log_text)
+        self.assertTrue(job_dir.is_dir())
+        self.assertTrue((job_dir / "output").is_dir())
+        self.assertFalse((self.app.config["ARCHIVE_ROOT"] / "{}.tar.gz".format(job_id)).exists())
+        detail = self.client.get("/jobs/{}".format(job_id))
+        self.assertIn("已取消".encode(), detail.data)
+        self.assertIn("运行日志已保留，结果不完整。".encode(), detail.data)
+        self.assertIn(b'id="cancel-job" hidden', detail.data.replace(b"\n", b" "))
+        history = self.client.get("/history")
+        self.assertIn("已取消".encode(), history.data)
+        self.assertIn("运行日志已保留，结果不完整。".encode(), history.data)
+        again = self.client.post(
+            "/api/jobs/{}/cancel".format(job_id),
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(again.status_code, 409)
+
+        token = re.search(
+            rb'name="csrf-token" content="([^"]+)"', self.client.get("/").data
+        ).group(1).decode()
+        finished = self.submit_job(self.client, token, ("megahit",)).json["job"]["id"]
+        self.assertTrue(process_next_job(self.app))
+        self.assertEqual(
+            self.client.post(
+                "/api/jobs/{}/cancel".format(finished),
+                headers={"X-CSRF-Token": token},
+            ).status_code,
+            409,
+        )
+        failed = self.submit_job(self.client, token, ("spades",)).json["job"]["id"]
+        with closing(sqlite3.connect(self.app.config["DATABASE"])) as db:
+            db.execute("UPDATE jobs SET status = 'failed' WHERE id = ?", (failed,))
+            db.commit()
+        self.assertEqual(
+            self.client.post(
+                "/api/jobs/{}/cancel".format(failed),
+                headers={"X-CSRF-Token": token},
+            ).status_code,
+            409,
+        )
+        self.assertEqual(
+            self.client.get("/api/jobs/{}".format(failed)).json["job"]["status"],
+            "failed",
+        )
+
+    def test_cancel_signals_process_group_and_keeps_finished_output(self):
+        self.pipeline.write_text(
+            "import os, signal, sys, time, pathlib\n"
+            "args = sys.argv\n"
+            "out = pathlib.Path(args[args.index('--outdir') + 1])\n"
+            "out.mkdir(parents=True, exist_ok=True)\n"
+            "(out / 'fastp').mkdir(parents=True, exist_ok=True)\n"
+            "(out / 'fastp' / 'report.html').write_text('fastp report')\n"
+            "(out / 'quast' / 'spades').mkdir(parents=True, exist_ok=True)\n"
+            "(out / 'quast' / 'spades' / 'report.tsv').write_text('quast')\n"
+            "(out / 'assemblies' / 'spades' / 'tmp').mkdir(parents=True, exist_ok=True)\n"
+            "(out / 'assemblies' / 'spades' / 'contigs.fasta').write_text('>contig')\n"
+            "(out / 'assemblies' / 'spades' / 'tmp' / 'junk').write_text('keep')\n"
+            "(out / 'assemblies' / 'megahit' / 'tmp').mkdir(parents=True, exist_ok=True)\n"
+            "(out / 'assemblies' / 'megahit' / 'tmp' / 'junk').write_text('temp')\n"
+            "(out / 'assemblies' / 'megahit' / 'intermediate_contigs').mkdir(parents=True)\n"
+            "(out / 'assemblies' / 'megahit' / 'intermediate_contigs' / 'part').write_text('temp')\n"
+            "(out / 'logs').mkdir(parents=True, exist_ok=True)\n"
+            "(out / 'logs' / 'spades.log').write_text('spades log')\n"
+            "(out / 'run.log').write_text('pipeline log')\n"
+            "(out / 'pipeline.pid').write_text(str(os.getpid()))\n"
+            "child = os.fork()\n"
+            "if child == 0:\n"
+            "    grand = os.fork()\n"
+            "    if grand == 0:\n"
+            "        def on_term(signum, _frame):\n"
+            "            (out / 'grandchild.signal').write_text(str(signum))\n"
+            "            os._exit(0)\n"
+            "        signal.signal(signal.SIGTERM, on_term)\n"
+            "        (out / 'grandchild.pid').write_text(str(os.getpid()))\n"
+            "        (out / 'grandchild.ready').write_text('1')\n"
+            "        deadline = time.time() + 30\n"
+            "        while time.time() < deadline:\n"
+            "            time.sleep(0.05)\n"
+            "        os._exit(0)\n"
+            "    def on_child(signum, _frame):\n"
+            "        (out / 'child.signal').write_text(str(signum))\n"
+            "        os._exit(0)\n"
+            "    signal.signal(signal.SIGTERM, on_child)\n"
+            "    (out / 'child.pid').write_text(str(os.getpid()))\n"
+            "    (out / 'child.ready').write_text('1')\n"
+            "    os.wait()\n"
+            "    os._exit(0)\n"
+            "limit = time.time() + 10\n"
+            "while time.time() < limit and not ((out / 'child.ready').exists() and (out / 'grandchild.ready').exists()):\n"
+            "    time.sleep(0.02)\n"
+            "(out / 'ready').write_text('1')\n"
+            "print('ready', flush=True)\n"
+            "os.waitpid(child, 0)\n",
+            encoding="utf-8",
+        )
+        token = self.login(self.client)
+        job_id = self.submit_job(self.client, token, ("spades", "megahit")).json["job"]["id"]
+        job_dir = self.app.config["JOBS_ROOT"] / job_id
+        work = job_dir / "work"
+        holder = {}
+
+        def run_job():
+            holder["processed"] = process_next_job(self.app)
+
+        thread = threading.Thread(target=run_job)
+        thread.start()
+        try:
+            deadline = time.time() + 10
+            while time.time() < deadline and not (work / "ready").is_file():
+                time.sleep(0.05)
+            self.assertTrue((work / "ready").is_file(), "pipeline did not reach the grandchild")
+            accepted = self.client.post(
+                "/api/jobs/{}/cancel".format(job_id),
+                headers={"X-CSRF-Token": token},
+            )
+            self.assertIn(accepted.status_code, (200, 202))
+            thread.join(15)
+        finally:
+            if thread.is_alive() and (work / "pipeline.pid").is_file():
+                try:
+                    os.killpg(int((work / "pipeline.pid").read_text()), signal.SIGKILL)
+                except OSError:
+                    pass
+                thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(holder.get("processed"))
+        for name in ("child", "grandchild"):
+            signal_path = work / "{}.signal".format(name)
+            self.assertTrue(signal_path.is_file(), name)
+            self.assertEqual(signal_path.read_text(encoding="utf-8"), str(signal.SIGTERM))
+            pid = int((work / "{}.pid".format(name)).read_text(encoding="utf-8"))
+            with self.assertRaises(OSError):
+                os.kill(pid, 0)
+        job = self.client.get("/api/jobs/{}".format(job_id)).json["job"]
+        self.assertEqual(job["status"], "cancelled")
+        self.assertFalse(job["archive_available"])
+        self.assertIsNone(job["progress"]["current"]["percent"])
+        log_path = job_dir / "logs" / "job.log"
+        log_text = log_path.read_text(encoding="utf-8")
+        self.assertIn("STATUS: queued", log_text)
+        self.assertIn("STATUS: running", log_text)
+        self.assertIn("STATUS: cancelling", log_text)
+        self.assertIn("STATUS: cancelled", log_text)
+        self.assertIn("ready", log_text)
+        self.assertTrue((work / "fastp" / "report.html").is_file())
+        self.assertTrue((work / "quast" / "spades" / "report.tsv").is_file())
+        self.assertTrue((work / "assemblies" / "spades" / "contigs.fasta").is_file())
+        self.assertTrue((work / "assemblies" / "spades" / "tmp" / "junk").is_file())
+        self.assertTrue((work / "logs" / "spades.log").is_file())
+        self.assertTrue((work / "run.log").is_file())
+        self.assertFalse((work / "assemblies" / "megahit" / "tmp").exists())
+        self.assertFalse((work / "assemblies" / "megahit" / "intermediate_contigs").exists())
+        self.assertTrue((job_dir / "output").is_dir())
+        self.assertFalse((self.app.config["ARCHIVE_ROOT"] / "{}.tar.gz".format(job_id)).exists())
+        self.assertFalse(process_next_job(self.app))
+        self.assertEqual(
+            self.client.get("/api/jobs/{}".format(job_id)).json["job"]["status"],
+            "cancelled",
+        )
+        second = self.client.post(
+            "/api/jobs/{}/cancel".format(job_id),
+            headers={"X-CSRF-Token": token},
+        )
+        self.assertEqual(second.status_code, 409)
+
+    def test_stop_process_group_escalates_to_sigkill(self):
+        script = self.root / "ignore_term.py"
+        script.write_text(
+            "import os, signal, sys, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "child = os.fork()\n"
+            "if child == 0:\n"
+            "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "    grand = os.fork()\n"
+            "    if grand == 0:\n"
+            "        signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "        open(sys.argv[1], 'w').write(str(os.getpid()))\n"
+            "        while True:\n"
+            "            time.sleep(0.05)\n"
+            "    open(sys.argv[2], 'w').write(str(os.getpid()))\n"
+            "    os.wait()\n"
+            "    os._exit(0)\n"
+            "open(sys.argv[3], 'w').write('ready')\n"
+            "os.wait()\n",
+            encoding="utf-8",
+        )
+        grandchild = self.root / "grandchild.pid"
+        child = self.root / "child.pid"
+        ready = self.root / "ready"
+        process = subprocess.Popen(
+            [sys.executable, str(script), str(grandchild), str(child), str(ready)],
+            start_new_session=True,
+        )
+        try:
+            deadline = time.time() + 5
+            while time.time() < deadline and not (ready.is_file() and grandchild.is_file() and child.is_file()):
+                time.sleep(0.02)
+            self.assertTrue(grandchild.is_file())
+            stop_process_group(process, grace_seconds=0.3)
+            self.assertEqual(process.returncode, -signal.SIGKILL)
+            for path in (grandchild, child):
+                with self.assertRaises(OSError):
+                    os.kill(int(path.read_text(encoding="utf-8")), 0)
+        finally:
+            if process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                process.wait(timeout=2)
+
+    def test_existing_database_accepts_cancelled_status(self):
+        data_root = self.root / "status-data"
+        data_root.mkdir()
+        legacy = data_root / "jobs.sqlite3"
+        with closing(sqlite3.connect(legacy)) as db:
+            db.executescript(
+                """
+                CREATE TABLE jobs (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id TEXT NOT NULL UNIQUE,
+                    owner TEXT NOT NULL,
+                    module_id TEXT NOT NULL DEFAULT 'bacterial-assembly',
+                    status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
+                    assemblers TEXT NOT NULL,
+                    threads INTEGER NOT NULL,
+                    sample TEXT NOT NULL,
+                    spades_kmers TEXT,
+                    spades_careful INTEGER NOT NULL,
+                    input_r1 TEXT NOT NULL,
+                    input_r2 TEXT NOT NULL,
+                    output_dir TEXT NOT NULL,
+                    archive_path TEXT,
+                    log_path TEXT NOT NULL,
+                    error TEXT,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                    started_at TEXT,
+                    completed_at TEXT
+                );
+                """
+            )
+            db.execute(
+                "INSERT INTO jobs (id, owner, module_id, status, assemblers, threads, "
+                "sample, spades_careful, input_r1, input_r2, output_dir, log_path) "
+                "VALUES ('legacy-job', 'alice', 'bacterial-assembly', 'queued', '[]', 1, "
+                "'legacy', 0, 'r1.fastq', 'r2.fastq', 'output', 'job.log')"
+            )
+            db.commit()
+        create_app(
+            {
+                "SECRET_KEY": "test-key-not-for-production-32bytes",
+                "USERS": {"alice": generate_password_hash("alice-password", method="scrypt")},
+                "DATA_ROOT": data_root,
+                "PIPELINE_PATH": self.pipeline,
+            }
+        )
+        database = data_root / "database" / "jobs.sqlite3"
+        with closing(sqlite3.connect(database)) as db:
+            db.execute("UPDATE jobs SET status = 'cancelled' WHERE id = 'legacy-job'")
+            db.commit()
+            row = db.execute(
+                "SELECT status, cancel_requested FROM jobs WHERE id = 'legacy-job'"
+            ).fetchone()
+            columns = {record[1] for record in db.execute("PRAGMA table_info(jobs)")}
+        self.assertEqual(row, ("cancelled", 0))
+        self.assertIn("worker_pid", columns)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>总览 · 微生物 NGS 数据分析系统</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='overview.js') }}" defer></script>
+</head>
+<body class="workbench">
+  {% include "_topbar.html" %}
+  <main class="dashboard overview-page">
+    <section class="overview-intro" aria-labelledby="overview-title">
+      <div>
+        <p class="eyebrow">WORKBENCH / THIS HOST</p>
+        <h1 id="overview-title">先看这台机器，<br>再开始下一次分析。</h1>
+        <p>任务数字只统计当前账号。CPU、内存和数据盘来自本机监控。</p>
+      </div>
+    </section>
+
+    <section class="host-instrument" id="host-instrument" aria-label="服务器资源">
+      {% set meters = [
+        ("cpu", "CPU", host.cpu),
+        ("memory", "内存", host.memory),
+        ("disk", "数据盘", host.disk)
+      ] %}
+      {% for key, label, metric in meters %}
+      <article class="host-meter host-meter-{{ key }}" data-meter="{{ key }}">
+        <span>{{ label }}</span>
+        {% if metric.ok %}
+        <strong data-percent>{{ metric.percent }}%</strong>
+        <div class="host-track" aria-hidden="true"><i style="--fill: {{ metric.percent }}%"></i></div>
+        {% if key == "cpu" %}
+        <small data-detail>{{ metric.cores }} 个逻辑 CPU</small>
+        {% else %}
+        <small data-detail>{{ metric.used }} / {{ metric.total }}{% if key == "disk" %} · {{ metric.path }}{% endif %}</small>
+        {% endif %}
+        {% else %}
+        <strong data-percent>—</strong>
+        <div class="host-track" aria-hidden="true"><i style="--fill: 0%"></i></div>
+        <small data-detail>无法读取</small>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </section>
+
+    <section class="census" aria-label="任务数量">
+      <div class="census-lead">
+        <span>当前任务</span>
+        <strong>{{ active_count }}</strong>
+        <small>排队 {{ counts.queued }} · 分析中 {{ counts.running }}{% if counts.cancelling %} · 取消中 {{ counts.cancelling }}{% endif %}</small>
+      </div>
+      <div class="census-item census-done">
+        <span>已完成</span>
+        <strong>{{ counts.succeeded }}</strong>
+      </div>
+      <div class="census-item{% if counts.failed %} census-failed{% endif %}">
+        <span>失败</span>
+        <strong>{{ counts.failed }}</strong>
+      </div>
+      <div class="census-item">
+        <span>全部记录</span>
+        <strong>{{ total_count }}</strong>
+      </div>
+    </section>
+
+    <div class="overview-columns">
+      <section class="overview-panel" aria-labelledby="recent-title">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">RECENT RUNS</p>
+            <h2 id="recent-title">最近分析</h2>
+          </div>
+          <a class="overview-more" href="{{ url_for('job_history') }}">处理历史 →</a>
+        </div>
+        {% if recent_jobs %}
+        <ul class="overview-runs">
+          {% for job in recent_jobs %}
+          <li>
+            <a class="overview-run-link" href="{{ url_for('job_page', job_id=job.id) }}">
+              <strong>{{ job.sample }}</strong>
+              <span>{{ job.module_code }} · {{ job.module_name }}</span>
+            </a>
+            <span class="status-pill status-{{ job.status }}">
+              {{ {"queued": "排队中", "running": "分析中", "cancelling": "取消中", "cancelled": "已取消", "succeeded": "已完成", "failed": "失败"}.get(job.status, job.status) }}
+            </span>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="empty-state">还没有分析任务。从下面的入口提交一个样本。</p>
+        {% endif %}
+      </section>
+
+      <section class="overview-panel" aria-labelledby="report-title">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">OUTPUT</p>
+            <h2 id="report-title">最近报告</h2>
+          </div>
+        </div>
+        {% if reports %}
+        <ul class="overview-reports">
+          {% for job in reports %}
+          <li>
+            <div>
+              <strong>{{ job.sample }}</strong>
+              <span>{{ job.module_name }}</span>
+            </div>
+            <a href="{{ url_for('download_job', job_id=job.id) }}">
+              {{ "下载部分结果" if job.status in ("failed", "cancelled") else "下载结果" }} ↓
+            </a>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="empty-state">还没有可下载的结果。任务完成后会出现在这里。</p>
+        {% endif %}
+      </section>
+    </div>
+
+    <section class="overview-access" aria-labelledby="access-title">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">START HERE</p>
+          <h2 id="access-title">快捷入口</h2>
+        </div>
+        <a class="overview-more" href="{{ url_for('module_index') }}">全部模块 →</a>
+      </div>
+      {% if modules %}
+      <div class="access-grid">
+        {% for module in modules %}
+        <a class="access-card" href="{{ url_for(module.endpoint) }}">
+          <span class="module-code">{{ module.code }}</span>
+          <span>
+            <strong>{{ module.name }}</strong>
+            <small>{{ module.description|default("进入此模块配置分析任务。") }}</small>
+          </span>
+          <b aria-hidden="true">→</b>
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="empty-state">当前没有可用模块。请联系管理员启用分析流程。</p>
+      {% endif %}
+    </section>
+
+    <footer class="page-footer"><span>MICROBIAL NGS</span><span>HOST OVERVIEW</span><span>JOBS ARE USER-SCOPED</span></footer>
+  </main>
+</body>
+</html>

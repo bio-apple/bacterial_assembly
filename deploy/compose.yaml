@@ -22,7 +22,7 @@ services:
       ASSEMBLY_WEB_SECRET: ${ASSEMBLY_WEB_SECRET:?Set a unique random secret in deploy/.env}
       ASSEMBLY_USERS_FILE: /config/users.json
       ASSEMBLY_DATA_ROOT: /data
-      TMPDIR: /data/tmp
+      TMPDIR: /data/temp
       PYTHONPATH: /opt/bacterial-assembly
     volumes:
       - ..:/opt/bacterial-assembly:ro
@@ -42,7 +42,7 @@ services:
       ASSEMBLY_WEB_SECRET: ${ASSEMBLY_WEB_SECRET:?Set a unique random secret in deploy/.env}
       ASSEMBLY_USERS_FILE: /config/users.json
       ASSEMBLY_DATA_ROOT: /data
-      TMPDIR: /data/tmp
+      TMPDIR: /data/temp
       PYTHONPATH: /opt/bacterial-assembly
     volumes:
       - ..:/opt/bacterial-assembly:ro

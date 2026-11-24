@@ -15,7 +15,7 @@
     </a>
     <p class="eyebrow">MICROBIAL NGS / DATA ANALYSIS</p>
     <h1>微生物 NGS，<br>数据分析系统。</h1>
-    <p class="login-copy">登录后选择已启用的分析模块，提交样本并跟踪处理结果。</p>
+    <p class="login-copy">登录后先看工作台总览，再进入分析模块提交样本。</p>
     <form class="login-form" method="post" action="{{ url_for('login_post') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label for="username">账号</label>
