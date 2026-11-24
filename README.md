@@ -8,17 +8,19 @@
 docker build -t bacterial-assembly:latest .
 ```
 
-镜像固定使用 fastp 0.23.4、SPAdes 3.15.5、Unicycler 0.5.1、Shovill 1.4.2、SKESA 2.5.1、MEGAHIT 1.2.9 和 QUAST 5.2.0；Web 依赖 Flask/Gunicorn。由于 Bioconda 的 Unicycler 配方要求 SPAdes 4.0.0 以上，而 Shovill 配方要求 SPAdes 4 以下，镜像在独立环境中安装 Unicycler/SPAdes 4.0.0；其余流程使用 SPAdes 3.15.5。
+镜像只安装软件环境，不包含流程和 Web 代码。其中固定使用 fastp 0.23.4、SPAdes 3.15.5、Unicycler 0.5.1、Shovill 1.4.2、SKESA 2.5.1、MEGAHIT 1.2.9、QUAST 5.2.0，以及 Flask/Gunicorn。由于 Bioconda 的 Unicycler 配方要求 SPAdes 4.0.0 以上，而 Shovill 配方要求 SPAdes 4 以下，镜像在独立环境中安装 Unicycler/SPAdes 4.0.0；其余流程使用 SPAdes 3.15.5。
 
 ## 运行
 
-把当前目录挂载为容器工作目录，并将输入路径和结果路径写成相对该目录的路径：
+把仓库只读挂载到 `/opt/bacterial-assembly`，把当前目录挂载为容器工作目录，并将输入路径和结果路径写成相对该目录的路径：
 
 ```bash
 docker run --rm \
   --user "$(id -u):$(id -g)" \
+  -v /path/to/bacterial_assembly:/opt/bacterial-assembly:ro \
   -v "$PWD:/work" -w /work \
   bacterial-assembly:latest \
+  python3 /opt/bacterial-assembly/run_pipeline.py \
   --r1 reads_R1.fastq.gz \
   --r2 reads_R2.fastq.gz \
   --outdir results/isolate_01 \
@@ -29,7 +31,7 @@ docker run --rm \
   --spades-careful
 ```
 
-输入支持 `.fastq`、`.fq` 及其 gzip 压缩文件。`--assembler` 可重复指定，取值为 `spades`、`unicycler`、`shovill`、`megahit`；至少指定一次，重复选择同一组装器会报错。所有选中的组装方法按 `--assembler` 的顺序串行执行，并使用同一份 fastp 过滤后 reads；每份组装均运行 QUAST。每种方法尝试使用逻辑 CPU 数的 90%（向下取整，至少 1 个线程）和物理内存的 90%（按 GiB 向下取整，至少 1 GiB）：SPAdes 传入 `-m`，Shovill 传入 `--ram`，MEGAHIT 传入等量字节的 `--memory`，Unicycler 通过 `--spades_options` 传入 `-m`。Unicycler 0.5.1 在该参数含 `-m` 时不再追加内部写死的 `-m 1024`。fastp 在组装前独立运行，使用全部逻辑 CPU。Web 样本任务仍按 FIFO 串行执行。组装方法互相隔离：某个方法失败不取消其他方法；若至少一种方法成功，仍会生成成功方法的比较汇总，CLI 以非零状态结束，Web 任务标记失败并提供部分结果下载。命令行、Web 表单和 API 均不接受手动线程数或内存上限。Unicycler 还会将内部 SPAdes 线程数限制为最多 32；Shovill 上游提示其底层 SPAdes 对超过 16 线程的支持可能不稳定，调用仍按 90% 线程传递。工具默认值和行为可能随版本变化；实际可用资源也受操作系统、容器和调度器限制。`--spades-kmers` 与 `--spades-careful` 仅控制 SPAdes；k-mer 为逗号分隔的奇数列表（最大 127），省略时使用 SPAdes 默认值。运行 `docker run --rm bacterial-assembly:latest --help` 查看参数。
+输入支持 `.fastq`、`.fq` 及其 gzip 压缩文件。`--assembler` 可重复指定，取值为 `spades`、`unicycler`、`shovill`、`megahit`；至少指定一次，重复选择同一组装器会报错。所有选中的组装方法按 `--assembler` 的顺序串行执行，并使用同一份 fastp 过滤后 reads；每份组装均运行 QUAST。每种方法尝试使用逻辑 CPU 数的 90%（向下取整，至少 1 个线程）和物理内存的 90%（按 GiB 向下取整，至少 1 GiB）：SPAdes 传入 `-m`，Shovill 传入 `--ram`，MEGAHIT 传入等量字节的 `--memory`，Unicycler 通过 `--spades_options` 传入 `-m`。Unicycler 0.5.1 在该参数含 `-m` 时不再追加内部写死的 `-m 1024`。fastp 在组装前独立运行，使用全部逻辑 CPU。Web 样本任务仍按 FIFO 串行执行。组装方法互相隔离：某个方法失败不取消其他方法；若至少一种方法成功，仍会生成成功方法的比较汇总，CLI 以非零状态结束，Web 任务标记失败并提供部分结果下载。命令行、Web 表单和 API 均不接受手动线程数或内存上限。Unicycler 还会将内部 SPAdes 线程数限制为最多 32；Shovill 上游提示其底层 SPAdes 对超过 16 线程的支持可能不稳定，调用仍按 90% 线程传递。工具默认值和行为可能随版本变化；实际可用资源也受操作系统、容器和调度器限制。`--spades-kmers` 与 `--spades-careful` 仅控制 SPAdes；k-mer 为逗号分隔的奇数列表（最大 127），省略时使用 SPAdes 默认值。运行 `docker run --rm -v /path/to/bacterial_assembly:/opt/bacterial-assembly:ro bacterial-assembly:latest python3 /opt/bacterial-assembly/run_pipeline.py --help` 查看参数。
 
 fastp 每次运行一次，产生过滤后双端 reads 和 HTML/JSON 报告。所选组装器按顺序读取同一对过滤后 reads；Unicycler 只传入 `-1/-2`，不传长读长参数 `-l`，因此运行 Illumina-only short-read workflow，而不是 hybrid assembly。Shovill 显式选择 SKESA 作为组装引擎。每份组装完成后立即以无参考模式运行 QUAST。
 
@@ -141,7 +143,7 @@ docker compose up -d --build
 docker compose logs -f web worker
 ```
 
-Compose 将 Web 端口仅绑定到 `127.0.0.1:8000`，并把输入、SQLite 队列、日志和结果保存在 `deploy/data/`。请把该目录放在有足够空间的持久磁盘上；Web 进程与单一 worker 共享该目录。worker 使用文件锁防止第二个 worker 并发消费；不要横向扩容 worker 服务。
+Compose 将仓库只读挂载到 `/opt/bacterial-assembly`，因此修改流程或 Web 代码后重启服务即可，不必为此重新构建镜像。运行容器的账号必须能读取这份仓库。Web 端口仅绑定到 `127.0.0.1:8000`，输入、SQLite 队列、日志和结果保存在 `deploy/data/`。请把该目录放在有足够空间的持久磁盘上；Web 进程与单一 worker 共享该目录。worker 使用文件锁防止第二个 worker 并发消费；不要横向扩容 worker 服务。
 
 ### HTTPS 反向代理
 

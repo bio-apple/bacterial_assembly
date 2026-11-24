@@ -20,9 +20,5 @@ RUN micromamba install --yes --name base \
         spades=4.0.0 \
     && micromamba clean --all --yes
 
-COPY run_pipeline.py /opt/bacterial-assembly/run_pipeline.py
-COPY scripts /opt/bacterial-assembly/scripts
-COPY web /opt/bacterial-assembly/web
-
+ENV PYTHONDONTWRITEBYTECODE=1
 WORKDIR /work
-ENTRYPOINT ["python3", "/opt/bacterial-assembly/run_pipeline.py"]

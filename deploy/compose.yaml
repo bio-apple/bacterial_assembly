@@ -25,6 +25,7 @@ services:
       TMPDIR: /data/tmp
       PYTHONPATH: /opt/bacterial-assembly
     volumes:
+      - ..:/opt/bacterial-assembly:ro
       - ./data:/data
       - ./users.json:/config/users.json:ro
     ports:
@@ -44,6 +45,7 @@ services:
       TMPDIR: /data/tmp
       PYTHONPATH: /opt/bacterial-assembly
     volumes:
+      - ..:/opt/bacterial-assembly:ro
       - ./data:/data
       - ./users.json:/config/users.json:ro
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
