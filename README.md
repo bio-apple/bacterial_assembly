@@ -1,6 +1,6 @@
 # 基于 NGS 的细菌基因组组装流程
 
-该流程面向单个 Illumina 双端 FASTQ 样本，以 Docker 镜像运行 fastp 过滤与报告、用户选择的一种或多种组装方法、每份组装对应的 QUAST 无参考评估和指标汇总。fastp 与 QUAST 始终运行，至少选择一种组装方法；不依据生物学阈值判定样本失败，也不根据 N50 自动推荐最佳组装。
+该流程面向单个 Illumina 双端 FASTQ 样本，以 Docker 镜像运行 fastp 过滤与报告、用户选择的一种或多种组装方法，以及成功组装上的 QUAST 无参考评估和指标汇总。至少选择一种组装方法；不依据生物学阈值判定样本失败，也不根据 N50 自动推荐最佳组装。
 
 ## 构建镜像
 
@@ -34,17 +34,17 @@ docker run --rm \
   --spades-careful
 ```
 
-输入支持 `.fastq`、`.fq` 及其 gzip 压缩文件。`--assembler` 可重复指定，取值为 `spades`、`unicycler`、`shovill`、`megahit`；至少指定一次，同一方法不可重复。所有选中的方法按 `--assembler` 顺序串行执行，共用同一份 fastp 过滤后 reads；每份组装均运行 QUAST。
+输入支持 `.fastq`、`.fq` 及其 gzip 压缩文件。`--assembler` 可重复指定，取值为 `spades`、`unicycler`、`shovill`、`megahit`；至少指定一次，同一方法不可重复。所有选中的方法按 `--assembler` 顺序串行执行，共用同一份 fastp 过滤后 reads。某方法成功后，对其原始组装和非空的长度筛选结果分别运行 QUAST；空筛选结果跳过 QUAST。
 
-逻辑 CPU 与物理内存先读取容器 cgroup（v1 或 v2）的有效上限；读不到时回退到主机。fastp 与每种组装方法共用同一配额：CPU 的 90%（向下取整，至少 1 个线程）和内存的 90%（按 GiB 向下取整，至少 1 GiB）。分配写入 `run.log`。SPAdes 传入 `-m`，Shovill 传入 `--ram`，MEGAHIT 传入等量字节的 `--memory`，Unicycler 通过 `--spades_options` 传入 `-m`。命令行、Web 表单和 API 均不接受手动线程数或内存上限。独立运行 QUAST 且未由总控分配线程时，使用全部逻辑 CPU。
+逻辑 CPU 与物理内存先读取容器 cgroup（v1 或 v2）的有效上限；读不到时回退到主机。总控按有效上限的 90% 计算配额（CPU 向下取整至少 1 个线程，内存按 GiB 向下取整至少 1 GiB），写入 `run.log`，并令 fastp 使用该线程数。各组装方法按同一规则取线程与内存：SPAdes 传入 `-t`/`-m`，Shovill 传入 `--cpus`/`--ram`，MEGAHIT 传入 `--num-cpu-threads` 与等量字节的 `--memory`，Unicycler 传入 `-t` 并通过 `--spades_options` 传入 `-m`。命令行、Web 表单和 API 均不接受手动线程数或内存上限。独立运行 QUAST 且环境中没有总控分配的线程数时，使用 `os.cpu_count()` 得到的逻辑 CPU 数（不经 cgroup 再裁剪）。
 
-`--spades-kmers` 与 `--spades-careful` 仅在选择 SPAdes 时生效；k-mer 为逗号分隔的奇数（最大 127），省略时用 SPAdes 默认值。Web worker 还会传入可选的 `--job-id`；命令行省略该参数时仍可独立运行。
+`--spades-kmers` 与 `--spades-careful` 仅在选择 SPAdes 时生效；k-mer 为逗号分隔的奇数（最大 127），省略时用 SPAdes 默认值。Web worker 总会传入 `--job-id`；命令行可省略该参数并独立运行。
 
-某个组装方法失败不取消其余方法。全部成功时退出码 0；部分成功时退出码 3，并写出 `assembly_outcome.json`；全部失败或 fastp 等前置步骤失败时退出码 1。Worker 根据该文件中的状态、退出码和对应 contig 文件判定任务结果，不能只凭 `comparison.tsv` 是否存在。
+某个组装方法失败不取消其余方法。流程在组装阶段结束或前置步骤异常时写出 `assembly_outcome.json`（临时文件后原子替换）：全部成功退出码 0，部分成功退出码 3，全部失败或 fastp 等前置失败退出码 1。Worker 核对声明中的状态与退出码，并确认每个成功方法都有非空 contig；不能只凭 `comparison.tsv` 是否存在。
 
 ## 独立软件脚本
 
-总控 `run_pipeline.py` 先运行 fastp，再按 `--assembler` 顺序调用所选组装方法及其 QUAST，最后只汇总本次成功的原始组装。需要单独运行某个步骤时：
+总控 `run_pipeline.py` 先运行 fastp，再按 `--assembler` 顺序调用所选组装方法；某方法成功后再跑其 QUAST，最后只汇总本次成功的原始组装。需要单独运行某个步骤时：
 
 ```bash
 python3 scripts/run_fastp.py --help
@@ -64,30 +64,28 @@ python3 scripts/summarize_quast.py --help
 ```text
 results/isolate_01/
 ├── assemblies/
-│   ├── megahit/
-│   │   ├── final.contigs.fa
-│   │   ├── contigs_gt500bp.fasta
-│   │   └── contigs_gt1000bp.fasta
-│   ├── shovill/
-│   ├── spades/
-│   └── unicycler/
+│   └── <assembler>/             # 仅所选且已启动的方法
+│       ├── <contigs>            # 方法成功时的原始组装 FASTA
+│       ├── contigs_gt500bp.fasta
+│       └── contigs_gt1000bp.fasta
 ├── assembly_outcome.json        # 组装结果声明
-├── comparison.tsv               # 仅成功原始组装的 QUAST 指标横向汇总
+├── comparison.tsv               # 仅成功原始组装的 QUAST 指标横向汇总；无成功方法时不写
 ├── fastp/
 │   ├── isolate_01_R1.fastq.gz
 │   ├── isolate_01_R2.fastq.gz
 │   ├── isolate_01_fastp.html
 │   └── isolate_01_fastp.json
 ├── quast/
-│   └── <assembler>/
+│   └── <assembler>/             # 仅成功方法；空筛选目录可能不存在
 │       ├── report.tsv
 │       ├── gt500bp/report.tsv
 │       └── gt1000bp/report.tsv
+├── stages.json
 ├── run.log
 └── versions.txt
 ```
 
-每种被选中的组装都输出原始 FASTA 和两个长度过滤 FASTA（严格大于 500 bp / 1000 bp）。QUAST 分别评估原始组装和非空筛选结果。`comparison.tsv` 只汇总本次成功的原始组装。`assembly_outcome.json` 至少包含协议版本、状态、所选/成功/失败的组装方法和退出码，先写临时文件再原子替换。结果目录必须不存在或为空。
+方法成功时写出原始 FASTA，以及长度严格大于 500 bp / 1000 bp 的两个过滤 FASTA（可为空文件）。QUAST 评估原始组装和非空筛选结果。`comparison.tsv` 只汇总本次成功的原始组装。`assembly_outcome.json` 含 `schema_version`、`status`、`selected_assemblers`、`successful_assemblers`、`failed_assemblers`、`exit_code`。结果目录必须不存在或为空。带 `--job-id` 时还会写出 `process.json`。
 
 ## 工具调用依据
 
@@ -113,23 +111,23 @@ Web 工作台定位为「微生物 NGS 数据分析系统」。用户登录后�
 浏览器按 8 MiB 分片上传 R1/R2。分片到齐后：
 
 1. **字节校验**：服务器计算 SHA-256，与浏览器提交值一致才继续。
-2. **记录校验**：`.gz` 先做完整 gzip 读取；再用 ValidateFastq 0.1.1 检查记录（退出码 0，且输出含 `no errors found`，不含 `Error found at readnumber`）。
-3. 创建任务前再核对 R1/R2 记录数量与 read 编号配对。
+2. **记录校验**：`.gz` 先做完整 gzip 读取；再用 ValidateFastq 0.1.1 检查记录（退出码 0，且输出含 `no errors found`，不含 `Error found at readnumber`）。通过后该文件为可分析。
+3. **配对检查**：创建任务或重新分析前，核对 R1/R2 记录数量与 read 编号配对。
 
-任一步失败时文件不可分析，不能启动组装。校验日志写在临时目录或任务 `logs/`。通过后两份文件才可提交分析。
+任一步失败都不能启动组装。单文件校验日志写在临时目录；配对结果写入任务 `logs/`（创建失败时临时目录仍可能保留配对日志）。两份文件都可分析且配对通过后才能排队。
 
 ### 分析与状态
 
-提交后选择样本名和至少一种组装方法。fastp 先运行一次，所选方法按选择顺序串行运行并使用同一资源配额。任务进入服务器端 FIFO 串行队列。
+提交分析时选择样本名和至少一种组装方法。fastp 先运行一次，所选方法按选择顺序串行运行，并按上文资源规则取线程与内存。任务进入服务器端 FIFO 串行队列。
 
-任务状态：排队中、分析中、已完成、部分完成、失败、取消中、已取消。
+任务状态标签：排队中、分析中、已完成、部分完成、失败、取消中、已取消（对应 `queued`、`running`、`succeeded`、`partial_success`、`failed`、`cancelling`、`cancelled`）。
 
 - 全部组装方法成功：`succeeded`
-- 部分组装方法成功：`partial_success`（可下载部分结果）
+- 至少一种成功且至少一种失败：`partial_success`（可下载已有结果）
 - 全部组装方法失败，或 fastp 等前置步骤失败：`failed`
 - 用户取消：`cancelled`
 
-`job_steps` 记录每个步骤的状态，与任务终态一致。排队中的步骤在终态任务上记为 skipped；部分完成时仍在运行的步骤记为 failed。不提供单步重跑。
+`job_steps` 记录每个步骤。任务已终态而步骤仍排队时记为 `skipped`；任务为部分完成而步骤仍运行时记为 `failed`。不提供单步重跑。
 
 任务详情可在「原始组装 / >500 bp / >1000 bp」之间切换查看指标，不按 N50 排序或标出最优。fastp 的 HTML 报告可在新窗口打开，页面另有质控指标摘要。
 
