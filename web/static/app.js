@@ -638,33 +638,12 @@
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body,
       });
-      showMessage("任务已加入串行队列。", false);
-      const submittedSample = form.sample.value;
-      const knownSamples = document.querySelector("#known-samples");
-      if (
-        knownSamples
-        && submittedSample
-        && ![...knownSamples.options].some((option) => option.value === submittedSample)
-      ) {
-        const option = document.createElement("option");
-        option.value = submittedSample;
-        knownSamples.append(option);
-      }
+      showMessage("任务已加入串行队列，正在打开任务详情…", false);
       for (const lane of Object.values(lanes)) {
         if (lane.file) sessionStorage.removeItem(storageKey(lane.role, lane.file));
-        lane.input.closest(".file-lane").querySelector(".file-name").textContent = "选择 FASTQ 文件";
-        lane.file = null;
-        lane.fileName = "";
-        resetLane(lane);
       }
-      form.reset();
-      assemblerOrder = [];
-      assemblerOrderField.value = "[]";
-      selectionOrderLabel.textContent = "选择顺序即执行顺序。";
-      spadesOptions.hidden = true;
-      selected = data.job.id;
-      logViewer.reset();
-      await refreshJobs();
+      window.location.assign(`/jobs/${encodeURIComponent(data.job.id)}`);
+      return;
     } catch (error) {
       showMessage(error.message);
     } finally {
@@ -673,7 +652,68 @@
     }
   });
 
+  function updateReviewSummary() {
+    const sampleNode = document.querySelector('[data-review="sample"]');
+    const r1Node = document.querySelector('[data-review="r1"]');
+    const r2Node = document.querySelector('[data-review="r2"]');
+    const checksNode = document.querySelector('[data-review="checks"]');
+    const assemblersNode = document.querySelector('[data-review="assemblers"]');
+    if (!sampleNode) return;
+    sampleNode.textContent = form.sample.value || "—";
+    r1Node.textContent = lanes.r1.fileName
+      ? `${lanes.r1.fileName}${lanes.r1.file ? ` · ${formatBytes(lanes.r1.file.size)}` : ""}`
+      : "尚未选择";
+    r2Node.textContent = lanes.r2.fileName
+      ? `${lanes.r2.fileName}${lanes.r2.file ? ` · ${formatBytes(lanes.r2.file.size)}` : ""}`
+      : "尚未选择";
+    const checkBits = [
+      `R1 ${labelsUpload(lanes.r1.status)}`,
+      `R2 ${labelsUpload(lanes.r2.status)}`,
+    ];
+    checksNode.textContent = checkBits.join(" · ");
+    assemblersNode.textContent = assemblerOrder.length
+      ? assemblerOrder.join(" → ")
+      : "尚未选择";
+  }
+
+  function labelsUpload(status) {
+    return ({
+      pending: "等待上传",
+      uploading: "上传中",
+      completed: "已通过校验",
+      failed: "失败",
+    })[status] || status;
+  }
+
+  let wizardStep = 1;
+  const wizardTabs = [...document.querySelectorAll("[data-wizard-tab]")];
+  const wizardPanels = [...document.querySelectorAll("[data-wizard-panel]")];
+
+  function showWizardStep(step) {
+    wizardStep = step;
+    wizardTabs.forEach((tab) => {
+      const active = Number(tab.dataset.wizardTab) === step;
+      tab.classList.toggle("is-active", active);
+      tab.setAttribute("aria-selected", String(active));
+    });
+    wizardPanels.forEach((panel) => {
+      panel.hidden = Number(panel.dataset.wizardPanel) !== step;
+    });
+    if (step === 4) updateReviewSummary();
+  }
+
+  wizardTabs.forEach((tab) => {
+    tab.addEventListener("click", () => showWizardStep(Number(tab.dataset.wizardTab)));
+  });
+  document.querySelectorAll("[data-wizard-next]").forEach((button) => {
+    button.addEventListener("click", () => showWizardStep(Math.min(4, wizardStep + 1)));
+  });
+  document.querySelectorAll("[data-wizard-prev]").forEach((button) => {
+    button.addEventListener("click", () => showWizardStep(Math.max(1, wizardStep - 1)));
+  });
+
   updateReady();
+  showWizardStep(1);
 
   refreshJobs();
   window.setInterval(() => {

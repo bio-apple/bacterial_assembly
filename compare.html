@@ -3,79 +3,50 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#eff4f2">
-  <title>运行比较 · 微生物 NGS 数据分析系统</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@500;600;700&display=swap">
+  <meta name="theme-color" content="#F5F7F8">
+  <title>运行比较 · 静态预览</title>
   <link rel="stylesheet" href="assets/style.css">
   <link rel="stylesheet" href="assets/demo.css">
 </head>
 <body class="workbench">
   <div class="demo-banner" role="note">
-    <span><strong>静态预览</strong> · 两条运行并排比较</span>
-    <span><a href="history.html">处理历史</a></span>
+    <span><strong>静态预览</strong> · GitHub Pages 展示界面，无后端、不可上传/提交/轮询</span>
+    <span><a href="index.html">项目页</a> · <a href="https://github.com/bio-apple/bacterial_assembly">仓库</a></span>
   </div>
-  <a class="skip-link" href="#main-content">跳到主要内容</a>
-  <header class="topbar">
-    <a class="brand" href="overview.html" aria-label="微生物 NGS 数据分析系统首页">
-      <span class="brand-icon" aria-hidden="true">MN<i></i></span>
-      <span>MICROBIAL <b>NGS</b></span>
-    </a>
-    <nav class="site-nav" aria-label="主要导航">
-      <a class="site-nav-link" href="overview.html">
-        <span class="nav-full">总览</span><span class="nav-short">总览</span>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="主导航">
+      <a class="brand sidebar-brand" href="overview.html">
+        <span class="brand-icon" aria-hidden="true">MN<i></i></span>
+        <span>MICROBIAL <b>NGS</b></span>
       </a>
-      <a class="site-nav-link" href="modules.html">
-        <span class="nav-full">分析模块</span><span class="nav-short">模块</span>
-      </a>
-      <a class="site-nav-link is-active" href="history.html" aria-current="page">
-        <span class="nav-full">处理历史</span><span class="nav-short">历史</span>
-      </a>
-    </nav>
-    <div class="topbar-right">
-      <span class="system-state"><i></i> Linux 工作节点</span>
-      <span class="user-tag">demo</span>
-      <a class="text-button" href="login.html">退出</a>
-    </div>
-  </header>
-  <main id="main-content" class="dashboard compare-page">
-    <header class="compare-heading">
-      <div>
-        <p class="eyebrow">TWO RUNS / NO AVERAGE</p>
-        <h1>运行比较</h1>
+      <nav class="sidebar-nav">
+      <a class="sidebar-link" href="overview.html">总览</a>
+      <a class="sidebar-link" href="modules.html">分析模块</a>
+      <a class="sidebar-link" href="dashboard.html">组装工作台</a>
+      <a class="sidebar-link is-active" href="history.html" aria-current="page">处理历史</a>
+      </nav>
+      <p class="sidebar-foot">STATIC PREVIEW</p>
+    </aside>
+    <header class="topbar">
+      <div class="topbar-right">
+        <span class="system-state"><i></i> 静态演示</span>
+        <span class="user-tag">demo</span>
+        <a class="text-button" href="login.html">退出</a>
       </div>
-      <a class="monitor-back" href="history.html">返回处理历史</a>
     </header>
-    <p class="compare-jobs">
-      <a href="job.html">isolate_07 · e5f6a7b8 · 已完成</a>
-      <span aria-hidden="true">/</span>
-      <a href="job.html">Ecoli_K12 · c9d0e1f2 · 部分完成</a>
-    </p>
-    <div class="compare-scroll">
-      <table class="compare-table">
-        <thead>
-          <tr>
-            <th scope="col">组装器</th>
-            <th scope="col">指标</th>
-            <th scope="col">isolate_07 · e5f6a7b8</th>
-            <th scope="col">Ecoli_K12 · c9d0e1f2</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr><th scope="row">spades</th><td># contigs</td><td>74</td><td>91</td></tr>
-          <tr><th scope="row">spades</th><td>Largest contig</td><td>428,110</td><td>301,220</td></tr>
-          <tr><th scope="row">spades</th><td>N50</td><td>112,450</td><td>86,730</td></tr>
-          <tr><th scope="row">spades</th><td>Total length</td><td>4,901,280</td><td>4,622,015</td></tr>
-          <tr><th scope="row">megahit</th><td># contigs</td><td>102</td><td>—</td></tr>
-          <tr><th scope="row">megahit</th><td>N50</td><td>88,640</td><td>—</td></tr>
-          <tr><th scope="row">unicycler</th><td># contigs</td><td>—</td><td>63</td></tr>
-          <tr><th scope="row">unicycler</th><td>N50</td><td>—</td><td>140,880</td></tr>
-        </tbody>
-        <caption>以下数字来自两条任务各自写出的比较表。</caption>
-      </table>
-    </div>
-    <footer class="page-footer"><span>MICROBIAL NGS</span><span>RUN COMPARISON</span><span>RESULTS ARE USER-SCOPED</span></footer>
-  </main>
+
+    <main id="main-content" class="dashboard compare-page">
+      <header class="compare-heading">
+        <div>
+          <p class="eyebrow">TWO RUNS</p>
+          <h1>运行比较</h1>
+          <p>布局示意。静态页无真实比较表数据。</p>
+        </div>
+        <a class="monitor-back" href="history.html">返回处理历史</a>
+      </header>
+      <p class="empty-state">请在已部署环境中选择两条写出比较表的任务。</p>
+    </main>
+
+  </div>
 </body>
 </html>

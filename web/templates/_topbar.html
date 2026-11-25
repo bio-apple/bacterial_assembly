@@ -1,23 +1,34 @@
 <a class="skip-link" href="#main-content">跳到主要内容</a>
-<header class="topbar">
-  <a class="brand" href="{{ url_for('overview') }}" aria-label="微生物 NGS 数据分析系统首页">
+<button type="button" class="sidebar-toggle" id="sidebar-toggle" aria-controls="app-sidebar" aria-expanded="false">
+  菜单
+</button>
+<aside class="sidebar" id="app-sidebar" aria-label="主导航">
+  <a class="brand sidebar-brand" href="{{ url_for('overview') }}" aria-label="微生物 NGS 数据分析系统首页">
     <span class="brand-icon" aria-hidden="true">MN<i></i></span>
     <span>MICROBIAL <b>NGS</b></span>
   </a>
-  <nav class="site-nav" aria-label="主要导航">
-    <a class="site-nav-link{% if active_page == 'overview' %} is-active{% endif %}"
+  <nav class="sidebar-nav" aria-label="主要导航">
+    <a class="sidebar-link{% if active_page == 'overview' %} is-active{% endif %}"
        href="{{ url_for('overview') }}"{% if active_page == 'overview' %} aria-current="page"{% endif %}>
-      <span class="nav-full">总览</span><span class="nav-short">总览</span>
+      总览
     </a>
-    <a class="site-nav-link{% if active_page == 'modules' %} is-active{% endif %}"
+    <a class="sidebar-link{% if active_page == 'modules' %} is-active{% endif %}"
        href="{{ url_for('module_index') }}"{% if active_page == 'modules' %} aria-current="page"{% endif %}>
-      <span class="nav-full">分析模块</span><span class="nav-short">模块</span>
+      分析模块
     </a>
-    <a class="site-nav-link{% if active_page == 'history' %} is-active{% endif %}"
+    <a class="sidebar-link{% if active_page == 'dashboard' %} is-active{% endif %}"
+       href="{{ url_for('dashboard') }}"{% if active_page == 'dashboard' %} aria-current="page"{% endif %}>
+      组装工作台
+    </a>
+    <a class="sidebar-link{% if active_page == 'history' %} is-active{% endif %}"
        href="{{ url_for('job_history') }}"{% if active_page == 'history' %} aria-current="page"{% endif %}>
-      <span class="nav-full">处理历史</span><span class="nav-short">历史</span>
+      处理历史
     </a>
   </nav>
+  <p class="sidebar-foot">BIOINFORMATICS WORKFLOW</p>
+</aside>
+<div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
+<header class="topbar">
   <div class="topbar-right">
     <div class="notice-slip" data-notice-root>
       <button type="button" class="notice-slip-toggle" aria-expanded="false" aria-controls="lab-notice-sheet" aria-label="实验室通知">
@@ -39,3 +50,4 @@
   </div>
 </header>
 <script src="{{ url_for('static', filename='notices.js') }}" defer></script>
+<script src="{{ url_for('static', filename='shell.js') }}" defer></script>

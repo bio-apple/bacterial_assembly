@@ -367,6 +367,7 @@ def create_app(test_config: dict | None = None) -> Flask:
                 "job_history": "history",
                 "compare_jobs": "history",
                 "module_index": "modules",
+                "dashboard": "dashboard",
                 "job_page": "monitor",
                 "job_report": "monitor",
             }.get(request.endpoint, "modules"),

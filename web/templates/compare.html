@@ -15,6 +15,7 @@
       <div>
         <p class="eyebrow">TWO RUNS / NO AVERAGE</p>
         <h1>运行比较</h1>
+        <p>指标并排展示，不据此自动判定「更优」组装。</p>
       </div>
       <a class="monitor-back" href="{{ url_for('job_history') }}">返回处理历史</a>
     </header>
@@ -23,6 +24,16 @@
       <span aria-hidden="true">/</span>
       <a href="{{ url_for('job_page', job_id=right.id) }}">{{ right.sample }} · {{ right.id[:8] }} · {{ status_labels[right.status] }}</a>
     </p>
+
+    {% set tips = {
+      "Total length": "该口径下 contig 长度之和。",
+      "# contigs": "该口径下 contig 条数。",
+      "Largest contig": "最长一条 contig 的长度。",
+      "N50": "按长度降序累计，达到总长一半时那条 contig 的长度；数值更大不表示更优。",
+      "L50": "达到总长一半所需的 contig 条数。",
+      "GC (%)": "序列中 G 与 C 碱基所占百分比。"
+    } %}
+
     <div class="compare-scroll">
       <table class="compare-table">
         <thead>
@@ -37,13 +48,16 @@
           {% for row in rows %}
           <tr>
             <th scope="row">{{ row.assembler }}</th>
-            <td>{{ row.metric }}</td>
+            <td>
+              {{ row.metric }}
+              <abbr class="metric-tip" title="{{ tips.get(row.metric, '来自两条任务各自写出的比较表。') }}">?</abbr>
+            </td>
             <td>{% if row.left is none %}—{% else %}{{ row.left }}{% endif %}</td>
             <td>{% if row.right is none %}—{% else %}{{ row.right }}{% endif %}</td>
           </tr>
           {% endfor %}
         </tbody>
-        <caption>以下数字来自两条任务各自写出的比较表。</caption>
+        <caption>以下数字来自两条任务各自写出的比较表。缺失值显示为 —，不填充虚构数值。</caption>
       </table>
     </div>
     <footer class="page-footer"><span>MICROBIAL NGS</span><span>RUN COMPARISON</span><span>RESULTS ARE USER-SCOPED</span></footer>

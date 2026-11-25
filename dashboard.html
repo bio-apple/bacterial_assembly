@@ -3,199 +3,64 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#eff4f2">
-  <title>细菌基因组组装 · 微生物 NGS 数据分析系统</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@500;600;700&display=swap">
+  <meta name="theme-color" content="#F5F7F8">
+  <title>组装工作台 · 静态预览</title>
   <link rel="stylesheet" href="assets/style.css">
   <link rel="stylesheet" href="assets/demo.css">
 </head>
 <body class="workbench">
   <div class="demo-banner" role="note">
-    <span><strong>静态预览</strong> · 工作台表单不可提交</span>
-    <span><a href="index.html">项目页</a> · <a href="job.html">任务监控示例 →</a></span>
+    <span><strong>静态预览</strong> · GitHub Pages 展示界面，无后端、不可上传/提交/轮询</span>
+    <span><a href="index.html">项目页</a> · <a href="https://github.com/bio-apple/bacterial_assembly">仓库</a></span>
   </div>
-  <a class="skip-link" href="#main-content">跳到主要内容</a>
-  <header class="topbar">
-    <a class="brand" href="overview.html" aria-label="微生物 NGS 数据分析系统首页">
-      <span class="brand-icon" aria-hidden="true">MN<i></i></span>
-      <span>MICROBIAL <b>NGS</b></span>
-    </a>
-    <nav class="site-nav" aria-label="主要导航">
-      <a class="site-nav-link" href="overview.html">
-        <span class="nav-full">总览</span><span class="nav-short">总览</span>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="主导航">
+      <a class="brand sidebar-brand" href="overview.html">
+        <span class="brand-icon" aria-hidden="true">MN<i></i></span>
+        <span>MICROBIAL <b>NGS</b></span>
       </a>
-      <a class="site-nav-link" href="modules.html">
-        <span class="nav-full">分析模块</span><span class="nav-short">模块</span>
-      </a>
-      <a class="site-nav-link" href="history.html">
-        <span class="nav-full">处理历史</span><span class="nav-short">历史</span>
-      </a>
-    </nav>
-    <div class="topbar-right">
-      <span class="system-state"><i></i> Linux 工作节点</span>
-      <span class="user-tag">demo</span>
-      <a class="text-button" href="login.html">退出</a>
-    </div>
-  </header>
-
-  <main id="main-content" class="dashboard">
-    <section class="page-intro" aria-labelledby="page-title">
-      <div class="intro-text">
-        <p class="eyebrow">ANALYSIS MODULES</p>
-        <nav class="module-nav" aria-label="分析模块">
-          <a class="module-tab is-active" href="dashboard.html" aria-current="page">
-            <span class="module-code">BA</span>
-            <span>细菌基因组组装</span>
-          </a>
-          <span class="module-extension" role="note">
-            <span class="module-plus" aria-hidden="true">+</span>
-            <span>新分析模块</span>
-            <small>接入后显示于此</small>
-          </span>
-        </nav>
-        <h1 id="page-title">从 reads 到 contigs</h1>
-        <p class="intro-copy">上传一对 Illumina FASTQ，选择组装器。fastp 与 QUAST 会自动运行。</p>
+      <nav class="sidebar-nav">
+      <a class="sidebar-link" href="overview.html">总览</a>
+      <a class="sidebar-link" href="modules.html">分析模块</a>
+      <a class="sidebar-link is-active" href="dashboard.html" aria-current="page">组装工作台</a>
+      <a class="sidebar-link" href="history.html">处理历史</a>
+      </nav>
+      <p class="sidebar-foot">STATIC PREVIEW</p>
+    </aside>
+    <header class="topbar">
+      <div class="topbar-right">
+        <span class="system-state"><i></i> 静态演示</span>
+        <span class="user-tag">demo</span>
+        <a class="text-button" href="login.html">退出</a>
       </div>
-      <figure class="workflow-map" aria-label="分析流程：双端 FASTQ、fastp 过滤、所选组装器、QUAST 评估">
-        <div class="workflow-stage workflow-input">
-          <span class="workflow-label">INPUT</span>
-          <div class="read-pair">
-            <span class="read-tag read-one">R1</span>
-            <span class="read-tag read-two">R2</span>
-          </div>
-          <strong>Paired FASTQ</strong>
-        </div>
-        <span class="workflow-connector" aria-hidden="true"></span>
-        <div class="workflow-stage">
-          <span class="workflow-label">FILTER</span>
-          <span class="workflow-symbol filter-symbol" aria-hidden="true">⌁</span>
-          <strong>fastp</strong>
-        </div>
-        <span class="workflow-connector" aria-hidden="true"></span>
-        <div class="workflow-stage">
-          <span class="workflow-label">ASSEMBLE</span>
-          <span class="workflow-symbol assembly-symbol" aria-hidden="true">Y</span>
-          <strong>Assemblers</strong>
-        </div>
-        <span class="workflow-connector" aria-hidden="true"></span>
-        <div class="workflow-stage">
-          <span class="workflow-label">ASSESS</span>
-          <span class="workflow-symbol quast-symbol" aria-hidden="true">↗</span>
-          <strong>QUAST</strong>
-        </div>
-      </figure>
-    </section>
+    </header>
 
-    <div class="workspace-grid">
-      <section class="panel submit-panel">
-        <div class="panel-heading">
-          <div><p class="eyebrow">NEW ANALYSIS</p><h2>准备样本</h2></div>
-          <span class="step-mark">FASTQ / PAIRED-END</span>
+    <main id="main-content" class="dashboard">
+      <section class="page-intro">
+        <div class="intro-text">
+          <p class="eyebrow">ANALYSIS WORKBENCH</p>
+          <h1>从 reads 到 contigs</h1>
+          <p class="intro-copy">四步流程界面示意。静态页不能上传或提交；请使用宿主机 Web。</p>
         </div>
-        <form id="job-form" onsubmit="event.preventDefault(); alert('静态预览：正式部署后可在此提交任务。');">
-          <div class="sample-lane">
-            <label class="file-lane">
-              <span class="lane-tag">R1</span>
-              <span class="lane-content"><b>Read 1</b><small class="file-name">isolate_01_R1.fastq.gz</small></span>
-              <span class="file-pick">浏览</span>
-              <input id="r1-file" name="r1" type="file" accept=".fastq,.fq,.fastq.gz,.fq.gz" disabled>
-            </label>
-            <div class="lane-link"><i></i><span>PAIRED</span><i></i></div>
-            <label class="file-lane">
-              <span class="lane-tag lane-tag-alt">R2</span>
-              <span class="lane-content"><b>Read 2</b><small class="file-name">isolate_01_R2.fastq.gz</small></span>
-              <span class="file-pick">浏览</span>
-              <input id="r2-file" name="r2" type="file" accept=".fastq,.fq,.fastq.gz,.fq.gz" disabled>
-            </label>
-          </div>
-          <div class="field-row">
-            <label class="field">
-              <span>样本</span>
-              <input name="sample" value="isolate_01" autocomplete="off" spellcheck="false" required>
-              <small>生物材料名称。同名样本会沿用，这次上传记为新的测序数据。</small>
-            </label>
-            <p class="resource-policy">所选组装方法按选择顺序串行执行，每种方法尝试使用约 90% 的逻辑 CPU 和物理内存。样本任务仍按提交顺序排队；单个方法失败不阻止其余方法。</p>
-          </div>
-          <fieldset class="assembler-select">
-            <legend>组装器 <small>至少选择一种 · 按选择顺序运行</small></legend>
-            <div class="assembler-options">
-              <label class="assembler-option">
-                <input type="checkbox" name="assembler" value="spades" checked>
-                <span class="check-box"></span><span>spades</span>
-              </label>
-              <label class="assembler-option">
-                <input type="checkbox" name="assembler" value="unicycler" checked>
-                <span class="check-box"></span><span>unicycler</span>
-              </label>
-              <label class="assembler-option">
-                <input type="checkbox" name="assembler" value="shovill">
-                <span class="check-box"></span><span>shovill</span>
-              </label>
-              <label class="assembler-option">
-                <input type="checkbox" name="assembler" value="megahit">
-                <span class="check-box"></span><span>megahit</span>
-              </label>
-            </div>
-            <p class="selection-order">选择顺序即执行顺序：spades → unicycler</p>
-          </fieldset>
-          <div class="form-footer">
-            <p>任务按提交顺序运行 · 结果仅当前账号可见</p>
-            <button class="button button-primary" type="submit">运行组装 <span>→</span></button>
-          </div>
-          <p class="form-message" role="status">静态预览不会实际上传或排队。</p>
-        </form>
       </section>
+      <div class="wizard-tabs" aria-label="提交流程示意">
+        <div class="wizard-tab is-active"><b>01</b><span><strong>上传 FASTQ</strong><small>R1 / R2</small></span></div>
+        <div class="wizard-tab"><b>02</b><span><strong>样本信息</strong><small>样本名称</small></span></div>
+        <div class="wizard-tab"><b>03</b><span><strong>组装配置</strong><small>组装方法</small></span></div>
+        <div class="wizard-tab"><b>04</b><span><strong>审查提交</strong><small>确认后排队</small></span></div>
+      </div>
+      <section class="panel submit-panel" style="padding:18px">
+        <p class="eyebrow">STEP 01 · UPLOAD</p>
+        <div class="sample-lane">
+          <div class="file-lane"><span class="lane-tag">R1</span><span class="lane-content"><b>Read 1</b><small class="file-name">静态预览 · 不可选择文件</small></span><span class="file-pick">浏览</span></div>
+          <div class="lane-link"><i></i><span>PAIRED</span><i></i></div>
+          <div class="file-lane"><span class="lane-tag lane-tag-alt">R2</span><span class="lane-content"><b>Read 2</b><small class="file-name">静态预览 · 不可选择文件</small></span><span class="file-pick">浏览</span></div>
+        </div>
+        <p class="form-message">静态预览不会实际上传、校验或入队。</p>
+        <p><a class="button" href="job.html">查看任务监控示意 →</a></p>
+      </section>
+    </main>
 
-      <aside class="queue-column">
-        <section class="panel queue-panel">
-          <div class="panel-heading">
-            <div><p class="eyebrow">YOUR QUEUE</p><h2>分析任务</h2></div>
-            <span class="queue-count">2</span>
-          </div>
-          <div class="job-list">
-            <a class="job-item selected" href="job.html" style="text-decoration:none">
-              <div class="job-topline">
-                <span class="job-name">isolate_01</span>
-                <span class="status-pill status-running">分析中</span>
-              </div>
-              <div class="job-subline">
-                <span class="job-assemblers"><span>spades</span><span>unicycler</span></span>
-                <span class="job-time">00:42:18</span>
-              </div>
-            </a>
-            <a class="job-item" href="job.html" style="text-decoration:none">
-              <div class="job-topline">
-                <span class="job-name">isolate_07</span>
-                <span class="status-pill status-succeeded">已完成</span>
-              </div>
-              <div class="job-subline">
-                <span class="job-assemblers"><span>spades</span><span>megahit</span></span>
-                <span class="job-time">01:47:08</span>
-              </div>
-            </a>
-          </div>
-        </section>
-        <section class="panel detail-panel">
-          <div class="panel-heading">
-            <div><p class="eyebrow">LIVE TRACE</p><h2>运行记录</h2></div>
-            <span class="status-pill status-running">分析中</span>
-          </div>
-          <div class="detail-summary">
-            <p><strong>isolate_01</strong> · 当前阶段 Unicycler</p>
-            <p>已运行 00:42:18 · 第 1 次执行</p>
-          </div>
-          <a class="job-monitor-link" href="job.html">查看进度</a>
-          <pre class="job-log" aria-live="polite">[14:22:01] fastp finished
-[14:28:40] SPAdes contigs written
-[14:31:05] QUAST for SPAdes done
-[14:31:12] Unicycler started…</pre>
-          <a class="button button-download" href="report.html">查看示例报告 <span>↓</span></a>
-        </section>
-      </aside>
-    </div>
-    <footer class="page-footer"><span>MICROBIAL NGS</span><span>FASTP → ASSEMBLER → QUAST</span><span>RESULTS ARE USER-SCOPED</span></footer>
-  </main>
+  </div>
 </body>
 </html>

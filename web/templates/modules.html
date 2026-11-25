@@ -66,6 +66,48 @@
       {% endif %}
       <p class="module-directory-note">管理员未启用的模块不会出现在目录中。运行状态只统计当前账号的任务。</p>
     </section>
+
+    <section class="module-directory" aria-labelledby="tools-title" style="margin-top:28px">
+      <div class="module-directory-heading">
+        <div>
+          <p class="eyebrow">PIPELINE SOFTWARE</p>
+          <h2 id="tools-title">流水线所用软件</h2>
+        </div>
+      </div>
+      <p class="module-directory-note">以下是分析模块内部调用的工具能力说明，不是可单独进入的分析模块。</p>
+      <div class="tool-capability-grid">
+        <article class="tool-capability">
+          <h3>fastp</h3>
+          <p>双端 reads 质量过滤与报告。输入 Illumina FASTQ；输出过滤后 reads 与 QC 摘要。</p>
+          <span class="badge">流水线步骤 · 已启用</span>
+        </article>
+        <article class="tool-capability">
+          <h3>SPAdes</h3>
+          <p>短读长 de Bruijn 图组装。可选 k-mer 与 careful 参数。</p>
+          <span class="badge">组装方法 · 可选</span>
+        </article>
+        <article class="tool-capability">
+          <h3>Unicycler</h3>
+          <p>细菌短读长组装流程。本平台按短读长模式调用。</p>
+          <span class="badge">组装方法 · 可选</span>
+        </article>
+        <article class="tool-capability">
+          <h3>Shovill / SKESA</h3>
+          <p>细菌基因组快速组装封装（镜像内含 SKESA 等相关依赖）。</p>
+          <span class="badge">组装方法 · 可选</span>
+        </article>
+        <article class="tool-capability">
+          <h3>MEGAHIT</h3>
+          <p>面向大规模短读长数据的组装器。</p>
+          <span class="badge">组装方法 · 可选</span>
+        </article>
+        <article class="tool-capability">
+          <h3>QUAST</h3>
+          <p>对已产出 contig 做无参考评估。评估失败不等于组装失败。</p>
+          <span class="badge">评估步骤 · 自动</span>
+        </article>
+      </div>
+    </section>
     <footer class="page-footer"><span>MICROBIAL NGS</span><span>MODULE DIRECTORY</span><span>RESULTS ARE USER-SCOPED</span></footer>
   </main>
 </body>

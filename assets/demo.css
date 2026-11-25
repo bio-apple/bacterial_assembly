@@ -7,25 +7,62 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem 1rem;
-  padding: 0.55rem max(1.25rem, env(safe-area-inset-right)) 0.55rem max(1.25rem, env(safe-area-inset-left));
-  background: #16383d;
-  color: #eff4f2;
+  padding: 0.55rem 1.25rem;
+  background: #123833;
+  color: #d7e8e4;
   font-family: "IBM Plex Mono", ui-monospace, monospace;
   font-size: 0.78rem;
   letter-spacing: 0.02em;
 }
 .demo-banner a {
-  color: #c8f560;
+  color: #8fd6c8;
   font-weight: 600;
   text-decoration: none;
 }
-.demo-banner a:hover {
-  text-decoration: underline;
+.demo-banner a:hover { text-decoration: underline; }
+.demo-banner strong { font-weight: 600; color: #9fe8df; }
+
+/* Pages demos: stack banner above the workbench grid */
+body.workbench {
+  display: block;
+  min-height: 100vh;
 }
-.demo-banner strong {
-  font-weight: 600;
-  color: #9fe8df;
+body.workbench .demo-banner { position: relative; }
+body.workbench .app-shell {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  grid-template-rows: 56px 1fr;
+  min-height: calc(100vh - 40px);
 }
-body.login-page .demo-banner {
-  position: relative;
+body.workbench .app-shell > .sidebar {
+  grid-column: 1;
+  grid-row: 1 / -1;
+}
+body.workbench .app-shell > .topbar {
+  grid-column: 2;
+  grid-row: 1;
+  justify-content: flex-end;
+}
+body.workbench .app-shell > main {
+  grid-column: 2;
+  grid-row: 2;
+  width: min(1440px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 24px 0 48px;
+}
+body.login-page .demo-banner { position: relative; }
+
+@media (max-width: 960px) {
+  body.workbench .app-shell {
+    grid-template-columns: 1fr;
+  }
+  body.workbench .app-shell > .sidebar {
+    position: relative;
+    transform: none;
+    width: auto;
+  }
+  body.workbench .app-shell > .topbar,
+  body.workbench .app-shell > main {
+    grid-column: 1;
+  }
 }
