@@ -1,14 +1,16 @@
 # 基于 NGS 的细菌基因组组装流程
 
-该流程面向单个 Illumina 双端 FASTQ 样本，以 Docker 镜像运行 fastp 过滤与报告、用户选择的一种或多种组装器、每份组装对应的 QUAST 无参考评估和指标汇总。fastp 与 QUAST 始终运行，至少选择一种组装器；不依据生物学阈值判定样本失败。
+该流程面向单个 Illumina 双端 FASTQ 样本，以 Docker 镜像运行 fastp 过滤与报告、用户选择的一种或多种组装方法、每份组装对应的 QUAST 无参考评估和指标汇总。fastp 与 QUAST 始终运行，至少选择一种组装方法；不依据生物学阈值判定样本失败，也不根据 N50 自动推荐最佳组装。
 
 ## 构建镜像
 
 ```bash
-docker build -t bacterial-assembly:latest .
+docker build --platform linux/amd64 -t bacterial-assembly:latest .
 ```
 
-镜像只安装软件环境，不包含流程和 Web 代码。其中固定使用 fastp 0.23.4、SPAdes 3.15.5、Unicycler 0.5.1、Shovill 1.4.2、SKESA 2.5.1、MEGAHIT 1.2.9、QUAST 5.2.0、ValidateFastq 0.1.1、OpenJDK 8，以及 Flask/Gunicorn。分片上传在 SHA-256 一致之后、进入可分析状态之前，用 ValidateFastq 检查这一份 FASTQ 的记录。由于 Bioconda 的 Unicycler 配方要求 SPAdes 4.0.0 以上，而 Shovill 配方要求 SPAdes 4 以下，镜像在独立环境中安装 Unicycler/SPAdes 4.0.0；其余流程使用 SPAdes 3.15.5。
+基础镜像是 `anaconda/miniconda:26.9.4`。镜像只安装软件环境，不包含流程和 Web 代码。arm64 宿主机也请按 `linux/amd64` 构建：SPAdes 3.15.5、QUAST 5.2.0 和 Shovill 依赖的 FLASH 只有 linux-64 包。
+
+镜像内固定安装 fastp 0.23.4、SPAdes 3.15.5、Unicycler 0.5.1、Shovill 1.4.2、SKESA 2.5.1、MEGAHIT 1.2.9、QUAST 5.2.0、ValidateFastq 0.1.1、OpenJDK 8，以及 Flask/Gunicorn。Unicycler 与 SPAdes 4.0.0 装在独立的 `unicycler` 环境；其余工具在 base 环境。Compose 用 `micromamba run -n base` 启动 Web 与 worker。
 
 ## 运行
 
@@ -17,6 +19,7 @@ docker build -t bacterial-assembly:latest .
 ```bash
 docker run --rm \
   --user "$(id -u):$(id -g)" \
+  --platform linux/amd64 \
   -v /path/to/bacterial_assembly:/opt/bacterial-assembly:ro \
   -v "$PWD:/work" -w /work \
   bacterial-assembly:latest \
@@ -31,15 +34,17 @@ docker run --rm \
   --spades-careful
 ```
 
-输入支持 `.fastq`、`.fq` 及其 gzip 压缩文件。`--assembler` 可重复指定，取值为 `spades`、`unicycler`、`shovill`、`megahit`；至少指定一次，重复选择同一组装器会报错。所有选中的组装方法按 `--assembler` 的顺序串行执行，并使用同一份 fastp 过滤后 reads；每份组装均运行 QUAST。每种方法尝试使用逻辑 CPU 数的 90%（向下取整，至少 1 个线程）和物理内存的 90%（按 GiB 向下取整，至少 1 GiB）：SPAdes 传入 `-m`，Shovill 传入 `--ram`，MEGAHIT 传入等量字节的 `--memory`，Unicycler 通过 `--spades_options` 传入 `-m`。Unicycler 0.5.1 在该参数含 `-m` 时不再追加内部写死的 `-m 1024`。fastp 在组装前独立运行，使用全部逻辑 CPU。Web 样本任务仍按 FIFO 串行执行。组装方法互相隔离：某个方法失败不取消其他方法；若至少一种方法成功，仍会生成成功方法的比较汇总，CLI 以非零状态结束，Web 任务标记失败并提供部分结果下载。命令行、Web 表单和 API 均不接受手动线程数或内存上限。Unicycler 还会将内部 SPAdes 线程数限制为最多 32；Shovill 上游提示其底层 SPAdes 对超过 16 线程的支持可能不稳定，调用仍按 90% 线程传递。工具默认值和行为可能随版本变化；实际可用资源也受操作系统、容器和调度器限制。`--spades-kmers` 与 `--spades-careful` 仅控制 SPAdes；k-mer 为逗号分隔的奇数列表（最大 127），省略时使用 SPAdes 默认值。运行 `docker run --rm -v /path/to/bacterial_assembly:/opt/bacterial-assembly:ro bacterial-assembly:latest python3 /opt/bacterial-assembly/run_pipeline.py --help` 查看参数。
+输入支持 `.fastq`、`.fq` 及其 gzip 压缩文件。`--assembler` 可重复指定，取值为 `spades`、`unicycler`、`shovill`、`megahit`；至少指定一次，同一方法不可重复。所有选中的方法按 `--assembler` 顺序串行执行，共用同一份 fastp 过滤后 reads；每份组装均运行 QUAST。
 
-fastp 每次运行一次，产生过滤后双端 reads 和 HTML/JSON 报告。所选组装器按顺序读取同一对过滤后 reads；Unicycler 只传入 `-1/-2`，不传长读长参数 `-l`，因此运行 Illumina-only short-read workflow，而不是 hybrid assembly。Shovill 显式选择 SKESA 作为组装引擎。每份组装完成后立即以无参考模式运行 QUAST。
+逻辑 CPU 与物理内存先读取容器 cgroup（v1 或 v2）的有效上限；读不到时回退到主机。fastp 与每种组装方法共用同一配额：CPU 的 90%（向下取整，至少 1 个线程）和内存的 90%（按 GiB 向下取整，至少 1 GiB）。分配写入 `run.log`。SPAdes 传入 `-m`，Shovill 传入 `--ram`，MEGAHIT 传入等量字节的 `--memory`，Unicycler 通过 `--spades_options` 传入 `-m`。命令行、Web 表单和 API 均不接受手动线程数或内存上限。独立运行 QUAST 且未由总控分配线程时，使用全部逻辑 CPU。
 
-每份原始组装还会生成 `contigs_gt500bp.fasta` 和 `contigs_gt1000bp.fasta`，分别只保留长度严格大于 500 bp 和 1000 bp 的 contig。QUAST 依次评估原始组装、非空的 >500 bp 结果和非空的 >1000 bp 结果；空筛选文件仍保留，并在日志中记录跳过原因。阈值结果报告单独放在各组装器的 `quast/<assembler>/gt500bp/` 与 `gt1000bp/` 中，不混入默认的 `comparison.tsv`；该汇总只比较所选组装器的原始组装。
+`--spades-kmers` 与 `--spades-careful` 仅在选择 SPAdes 时生效；k-mer 为逗号分隔的奇数（最大 127），省略时用 SPAdes 默认值。Web worker 还会传入可选的 `--job-id`；命令行省略该参数时仍可独立运行。
+
+某个组装方法失败不取消其余方法。全部成功时退出码 0；部分成功时退出码 3，并写出 `assembly_outcome.json`；全部失败或 fastp 等前置步骤失败时退出码 1。Worker 根据该文件中的状态、退出码和对应 contig 文件判定任务结果，不能只凭 `comparison.tsv` 是否存在。
 
 ## 独立软件脚本
 
-总控 `run_pipeline.py` 先运行 fastp，再按 `--assembler` 的顺序调用所选组装器及其 QUAST，最后只汇总本次选中的组装器；该顺序同时是执行顺序和比较表中的排列。需要单独运行某个步骤时，可先查看对应参数：
+总控 `run_pipeline.py` 先运行 fastp，再按 `--assembler` 顺序调用所选组装方法及其 QUAST，最后只汇总本次成功的原始组装。需要单独运行某个步骤时：
 
 ```bash
 python3 scripts/run_fastp.py --help
@@ -52,12 +57,12 @@ python3 scripts/filter_contigs.py --help
 python3 scripts/summarize_quast.py --help
 ```
 
-各软件脚本都直接通过 `subprocess` 调用工具；可用 `--log` 和 `--versions-file` 指定日志与版本文件。省略时，这些文件写在该步骤结果目录的上级目录。独立运行前需准备相应工具及输入；例如 Unicycler 需在含其运行依赖的环境中执行。独立汇总时需按报告选择传入组装器，例如 `python3 scripts/summarize_quast.py --outdir results/isolate_01 --assembler spades --assembler megahit`。
+各软件脚本通过 `subprocess` 调用工具；可用 `--log` 和 `--versions-file` 指定日志与版本文件。省略时，这些文件写在该步骤结果目录的上级目录。
 
 ## 结果结构
 
 ```text
-results/isolate_01/                 # 显示全部四种组装器；仅所选项会生成
+results/isolate_01/
 ├── assemblies/
 │   ├── megahit/
 │   │   ├── final.contigs.fa
@@ -66,7 +71,8 @@ results/isolate_01/                 # 显示全部四种组装器；仅所选项
 │   ├── shovill/
 │   ├── spades/
 │   └── unicycler/
-├── comparison.tsv               # QUAST 指标横向汇总
+├── assembly_outcome.json        # 组装结果声明
+├── comparison.tsv               # 仅成功原始组装的 QUAST 指标横向汇总
 ├── fastp/
 │   ├── isolate_01_R1.fastq.gz
 │   ├── isolate_01_R2.fastq.gz
@@ -74,14 +80,14 @@ results/isolate_01/                 # 显示全部四种组装器；仅所选项
 │   └── isolate_01_fastp.json
 ├── quast/
 │   └── <assembler>/
-│       ├── report.tsv            # 原始组装
-│       ├── gt500bp/report.tsv    # 非空时
-│       └── gt1000bp/report.tsv   # 非空时
+│       ├── report.tsv
+│       ├── gt500bp/report.tsv
+│       └── gt1000bp/report.tsv
 ├── run.log
 └── versions.txt
 ```
 
-每种被选中的组装都输出原始 FASTA 和两个长度过滤 FASTA；阈值比较严格使用 `>`。QUAST 分别评估原始组装和非空筛选结果，空筛选 FASTA 保留并记录跳过信息。`comparison.tsv` 只汇总本次选择的原始组装，摘录 contig 数、总长度、最大 contig、N50、L50 和 GC 百分比。未选中的组装器不会产生结果目录。结果目录必须不存在或为空，以免覆盖先前结果；重新运行时请指定新目录。`run.log` 记录运行步骤、过滤结果与工具输出；`versions.txt` 记录本次实际运行的工具版本，包括 Unicycler 专用环境中的 SPAdes 版本。
+每种被选中的组装都输出原始 FASTA 和两个长度过滤 FASTA（严格大于 500 bp / 1000 bp）。QUAST 分别评估原始组装和非空筛选结果。`comparison.tsv` 只汇总本次成功的原始组装。`assembly_outcome.json` 至少包含协议版本、状态、所选/成功/失败的组装方法和退出码，先写临时文件再原子替换。结果目录必须不存在或为空。
 
 ## 工具调用依据
 
@@ -92,27 +98,52 @@ results/isolate_01/                 # 显示全部四种组装器；仅所选项
 
 ## 本地参数检查与流程冒烟测试
 
-安装 Web 测试依赖后运行语法、模拟 CLI 和 Web 鉴权/队列测试：
-
 ```bash
 python3 -m pip install -r requirements-web.txt
+python3 -m unittest discover -s tests -p 'test_*.py'
 bash tests/smoke.sh
 ```
 
-
 ## Linux 浏览器工作台部署
 
-Web 工作台定位为“微生物 NGS 数据分析系统”。用户登录后进入 `/overview` 总览，查看本人的当前、已完成和失败任务、最近分析、最近报告，以及本机 CPU、内存和数据目录所在磁盘的实际占用，再从快捷入口或 `/modules` 模块目录进入工作台；当前提供细菌基因组组装模块。进入后选择 R1/R2。文件按 8 MiB 分片上传，中断后从缺失分片继续；两份 reads 都校验通过后，再选择样本名和至少一个组装器并提交。fastp 先运行一次，所选组装方法按选择顺序串行运行并使用同一份过滤后 reads；每种方法尝试使用约 90% 的逻辑 CPU 和物理内存。每份原始和非空的长度筛选组装均由 QUAST 评估。样本任务进入服务器端 FIFO 串行队列，页面轮询显示任务状态和实时日志；完成后可通过浏览器下载全部输出，部分方法失败时可下载成功方法的部分结果。`/history` 处理历史页按样本显示分析模块、所选组装器、任务状态、结束时间和运行时间；每条可用记录可直接下载输出结果，并可下载运行日志。运行中任务的耗时会实时更新，时间按浏览器时区显示，历史记录按账号隔离并分页。任务、日志和结果只对提交该任务的账号开放；不提供注册或删除功能。提交者可以在任务详情页或处理历史中取消自己尚未结束的任务：排队中的任务标为已取消且不会启动；运行中的任务先标为取消中，停止后再标为已取消，并且不会自动重试。已完成的输出和运行日志会保留。还没有结果包时，页面说明日志已保留、结果不完整，不会为取消临时打包。
+Web 工作台定位为「微生物 NGS 数据分析系统」。用户登录后进入 `/overview`，查看本人任务与本机资源占用，再从 `/modules` 进入细菌基因组组装模块。
+
+### 上传与校验
+
+浏览器按 8 MiB 分片上传 R1/R2。分片到齐后：
+
+1. **字节校验**：服务器计算 SHA-256，与浏览器提交值一致才继续。
+2. **记录校验**：`.gz` 先做完整 gzip 读取；再用 ValidateFastq 0.1.1 检查记录（退出码 0，且输出含 `no errors found`，不含 `Error found at readnumber`）。
+3. 创建任务前再核对 R1/R2 记录数量与 read 编号配对。
+
+任一步失败时文件不可分析，不能启动组装。校验日志写在临时目录或任务 `logs/`。通过后两份文件才可提交分析。
+
+### 分析与状态
+
+提交后选择样本名和至少一种组装方法。fastp 先运行一次，所选方法按选择顺序串行运行并使用同一资源配额。任务进入服务器端 FIFO 串行队列。
+
+任务状态：排队中、分析中、已完成、部分完成、失败、取消中、已取消。
+
+- 全部组装方法成功：`succeeded`
+- 部分组装方法成功：`partial_success`（可下载部分结果）
+- 全部组装方法失败，或 fastp 等前置步骤失败：`failed`
+- 用户取消：`cancelled`
+
+`job_steps` 记录每个步骤的状态，与任务终态一致。排队中的步骤在终态任务上记为 skipped；部分完成时仍在运行的步骤记为 failed。不提供单步重跑。
+
+任务详情可在「原始组装 / >500 bp / >1000 bp」之间切换查看指标，不按 N50 排序或标出最优。fastp 的 HTML 报告可在新窗口打开，页面另有质控指标摘要。
+
+提交者可取消自己尚未结束的任务。已完成、部分完成、失败或已取消的任务不能再取消。取消后保留已有输出和日志，不为取消临时打包。
+
+`/history` 按账号隔离显示任务；可下载结果或日志，并可重新分析（新建任务，不覆盖原任务）。
 
 ### 分析模块扩展
 
-`/modules` 模块目录与工作台模块导航由 `web/modules.py` 中的 `ANALYSIS_MODULES` 驱动。新增分析模块时，先实现独立的登录保护路由和页面，再登记模块 ID、名称、标识、说明和 Flask endpoint；模块目录会自动生成入口卡片，工作台导航会高亮当前模块。新模块提交任务时还需把对应 ID 写入作业记录，以便处理历史正确显示模块归属。只有路由和分析页面准备好后才应登记；现有组装流程保持不变。
-
-新模块页面沿用现有顶栏，并包含 `web/templates/components/` 里的上传区、状态标签、运行日志和确认框，不要复制这些标记。任务状态只用这一套中文标签（排队中、分析中、已完成、失败、取消中、已取消）。日志按偏移量追加，用户没有向上滚动时保持在底部。阶段轨道只在任务详情页出现，其他页面用「查看进度」链过去。取消任务和重新分析共用同一个确认框，确认按钮文字与页面按钮一致。
+`/modules` 与工作台导航由 `web/modules.py` 中的 `ANALYSIS_MODULES` 驱动。新增模块时先实现登录保护路由和页面，再登记模块 ID。只有路由和页面准备好后才应登记。新页面沿用顶栏和 `web/templates/components/` 中的上传区、状态标签、运行日志和确认框。
 
 ### 配置账号与密钥
 
-在 Linux 服务器安装 Docker Engine、Docker Compose plugin、Nginx，并将仓库放到服务器。进入部署目录，准备私密配置：
+在 Linux 服务器安装 Docker Engine、Docker Compose plugin、Nginx，并将仓库放到服务器：
 
 ```bash
 cd deploy
@@ -121,15 +152,7 @@ cp users.json.example users.json
 chmod 600 .env users.json
 ```
 
-在 `.env` 中设置随机密钥和运行容器的 Linux UID/GID：
-
-```bash
-openssl rand -hex 32
-id -u
-id -g
-```
-
-将命令输出分别填入 `ASSEMBLY_WEB_SECRET`、`APP_UID` 和 `APP_GID`。密钥没有默认值；未设置时服务拒绝启动。创建管理员预配账号的密码哈希：
+在 `.env` 中设置 `ASSEMBLY_WEB_SECRET`、`APP_UID`、`APP_GID`（密钥无默认值）。生成密码哈希：
 
 ```bash
 docker compose build
@@ -137,7 +160,7 @@ docker compose run --rm --entrypoint micromamba web \
   run -n base python /opt/bacterial-assembly/web/password_hash.py
 ```
 
-把输出的账号与哈希填入 `users.json`，格式为 `{"users":{"labuser":"scrypt:..."}}`。密码以 scrypt 哈希保存，不写入明文配置；账号只能由服务器管理员添加或移除。之后准备持久数据目录并启动：
+把账号与 scrypt 哈希填入 `users.json`。然后：
 
 ```bash
 mkdir -p data
@@ -146,41 +169,29 @@ docker compose up -d --build
 docker compose logs -f web worker
 ```
 
-Compose 将仓库只读挂载到 `/opt/bacterial-assembly`，因此修改流程或 Web 代码后重启服务即可，不必为此重新构建镜像。运行容器的账号必须能读取这份仓库。Web 端口仅绑定到 `127.0.0.1:8000`。运行数据独立于 Web 代码，根目录仍是 `deploy/data/`（容器内 `/data`，由 `ASSEMBLY_DATA_ROOT` 指定）：
+Compose 将仓库只读挂载到 `/opt/bacterial-assembly`。修改流程或 Web 代码后重启服务即可，不必为此重建镜像。Web 端口绑定 `127.0.0.1:8000`。运行数据根目录是 `deploy/data/`（容器内 `/data`，`ASSEMBLY_DATA_ROOT`）：
 
 ```text
 data/
-  uploads/incoming/     # 尚未收完的上传
-  uploads/chunks/       # 分片上传的片段
-  uploads/validated/    # 校验通过、尚未绑定任务的完整文件
-  jobs/<任务编号>/input/  # 该任务实际分析的 reads
-  jobs/<任务编号>/work/   # 该任务的工具中间文件
-  jobs/<任务编号>/output/ # 组装、QUAST 与比较等最终结果
-  jobs/<任务编号>/logs/   # 任务日志
-  reports/              # 原始结果以外的报告文件
-  database/jobs.sqlite3 # 任务队列
-  temp/                 # Web 与 worker 的临时目录
-  archive/              # 下载用的 tar.gz
+  uploads/incoming/
+  uploads/chunks/
+  uploads/validated/
+  jobs/<任务编号>/input/
+  jobs/<任务编号>/work/
+  jobs/<任务编号>/output/
+  jobs/<任务编号>/logs/
+  reports/
+  database/jobs.sqlite3
+  temp/
+  archive/
 ```
 
-分析只读 `jobs/<任务编号>/input`，不读 `incoming` 或 `chunks`。若数据根目录下仍有旧的 `jobs.sqlite3`，而 `database/jobs.sqlite3` 还不存在，启动时会把旧库移过去，不删表。请把 `deploy/data/` 放在有足够空间的持久磁盘上；Web 进程与单一 worker 共享该目录。worker 使用数据根上的 `worker.lock` 防止第二个 worker 并发消费；不要横向扩容 worker 服务。
+分析只读 `jobs/<任务编号>/input`。若数据根下仍有旧的 `jobs.sqlite3` 而 `database/jobs.sqlite3` 不存在，启动时会把旧库移过去，不删表。worker 使用数据根上的 `worker.lock`；不要横向扩容 worker。
 
 ### HTTPS 反向代理
 
-`deploy/nginx.conf` 是 Nginx HTTPS 配置示例。将其安装到 Nginx `conf.d`，把证书路径替换为服务器已有的 TLS 证书，并将服务器名按需配置：
-
-```bash
-sudo cp nginx.conf /etc/nginx/conf.d/assembly.conf
-sudo nginx -t
-sudo systemctl reload nginx
-```
-
-证书必须与访问地址匹配；若直接用 IP 访问，证书需包含该 IP 地址的 SAN，否则浏览器会显示证书警告。防火墙只开放 HTTPS（需要 HTTP 跳转时再开放 80）；不要将应用的 8000 端口暴露到公网。示例 Nginx 将上传体积上限设为不限制，并关闭请求缓冲；上传实际受反向代理配置、`deploy/data/` 所在磁盘容量和 `deploy/data/temp/` 临时空间约束。应用不设置 FASTQ 大小阈值，磁盘满时会报告上传失败。
-
-浏览器把每个 FASTQ 按 8 MiB 分片上传，并用 XMLHttpRequest 报告该 read 的百分比和速度。网络中断后，已写入 `deploy/data/uploads/chunks/<会话>/` 的分片会跳过，从缺失分片继续，不必重传整个文件。全部分片到齐后，服务器计算文件的 SHA-256，与浏览器提交的校验值一致才把文件移入 `uploads/validated/<会话>/`。未完成、校验失败或仍在传输的文件只留在分片暂存目录，不会进入 validated 或 `jobs/<任务>/input`，也不能创建分析任务。提交分析时，接口只接受当前账号名下两个已完成且校验通过的上传会话，再把文件移动到该任务的输入目录。会话编号和暂存路径由服务器生成；请求若携带路径字段或试图穿越目录，会被拒绝。
-
-登录使用安全、HttpOnly、SameSite=Lax 的 HTTPS cookie，并验证 CSRF token；Nginx 示例对登录路径限速。只应通过可信的本机反向代理访问 Gunicorn，因为应用信任一跳 `X-Forwarded-*` 头。
+将 `deploy/nginx.conf` 安装到 Nginx `conf.d`，替换证书路径与服务器名后重载。防火墙只开放 HTTPS；不要把 8000 端口暴露到公网。登录使用安全、HttpOnly、SameSite=Lax 的 HTTPS cookie，并验证 CSRF；应用信任一跳 `X-Forwarded-*` 头。
 
 ### 结果保留与手动清理
 
-上传 FASTQ、作业数据库、日志、分析结果和下载压缩包都会一直保留，直到管理员清理；Web 界面不提供删除入口。定期监控磁盘空间并先备份需要保留的结果。完全清理前先停止服务，再由管理员手动归档或删除 `deploy/data/` 中的数据；删除 `deploy/data/database/jobs.sqlite3` 会一并移除作业历史。完成后重新启动服务。
+上传 FASTQ、作业数据库、日志、分析结果和下载压缩包一直保留到管理员清理；Web 界面不提供删除。完全清理前先停止服务，再手动归档或删除 `deploy/data/` 中的数据。

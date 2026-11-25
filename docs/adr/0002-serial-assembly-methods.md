@@ -4,6 +4,6 @@ status: accepted
 
 # 组装方法串行并按九成资源尝试
 
-同一分析任务内的组装方法按选择顺序逐个执行，不再并行分核。每个方法默认尝试使用逻辑 CPU 的 90%（向下取整，至少 1 个线程）和物理内存的 90%（按 GiB 向下取整，至少 1 GiB）。样本任务仍按 FIFO 串行。一个方法失败不取消后续方法。
+同一分析任务内的组装方法按选择顺序逐个执行。逻辑 CPU 与物理内存先取容器 cgroup（v1 或 v2）的有效上限，读不到时回退到主机。fastp 与每种组装方法共用同一配额：CPU 的 90%（向下取整，至少 1）和内存的 90%（按 GiB 向下取整，至少 1 GiB）。分配写入 `run.log`。样本任务仍按 FIFO 串行。一个方法失败不取消后续方法。
 
-先前并行是为了缩短墙钟时间，但几种组装器会同时按各自默认上限申请内存，单机上容易在 CPU 未满时被内存打死。串行让每种方法都能尝试接近整机资源。不使用 cgroup 限制进程：SPAdes 传入 `-m`，Shovill 传入 `--ram`，MEGAHIT 传入等量字节的 `--memory`。Unicycler 0.5.1 在 `--spades_options` 含 `-m` 时不再追加内部写死的 `-m 1024`。fastp 仍在组装前单独运行并使用全部逻辑 CPU。Unicycler 内部仍把 SPAdes 线程限制为最多 32；Shovill 超过 16 线程时仍可能不稳定，调用仍按 90% 线程传递。
+资源通过工具参数传递：SPAdes 的 `-m`，Shovill 的 `--ram`，MEGAHIT 的 `--memory`，Unicycler 的 `--spades_options -m`。不另起 cgroup 去限制子进程。Unicycler 内部仍把 SPAdes 线程限制为最多 32；Shovill 超过 16 线程时仍可能不稳定，调用仍按 90% 线程传递。独立运行 QUAST 且未由总控分配线程时，使用全部逻辑 CPU。
