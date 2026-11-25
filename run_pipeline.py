@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shlex
 import subprocess
 import sys
 import threading
+import uuid
 from pathlib import Path
 
 from scripts.common import (
@@ -42,6 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--r2", required=True, help="R2 FASTQ/FASTQ.GZ file")
     parser.add_argument("--outdir", required=True, help="Empty results directory")
     parser.add_argument("--sample", default="sample")
+    parser.add_argument("--job-id", help="Owning analysis job, recorded with the process group")
     parser.add_argument("--spades-kmers", type=parse_kmers)
     parser.add_argument("--spades-careful", action="store_true")
     parser.add_argument(
@@ -343,6 +346,22 @@ def main() -> int:
         parser.error(str(error))
 
     outdir = outdir.resolve()
+    if args.job_id:
+        try:
+            job_token = str(uuid.UUID(args.job_id))
+        except ValueError:
+            parser.error("--job-id must be a UUID")
+        (outdir / "process.json").write_text(
+            json.dumps(
+                {
+                    "job_id": job_token,
+                    "pid": os.getpid(),
+                    "process_group_id": os.getpgid(0),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
     log_path = outdir / "run.log"
     versions_path = outdir / "versions.txt"
     versions_path.write_text("", encoding="utf-8")

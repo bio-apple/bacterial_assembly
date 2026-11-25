@@ -974,6 +974,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .report-links a:hover { color: var(--coral); }
 .report-links [hidden] { display: none; }
 .field small { display: block; margin-top: 6px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.phase-times[hidden], #worker-beat[hidden] { display: none; }
 .record-grid {
   margin: 16px 0 0;
   display: grid;

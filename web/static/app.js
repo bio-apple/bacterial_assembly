@@ -235,7 +235,8 @@
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       const error = new Error(data.error || `上传失败（HTTP ${response.status}）。`);
-      error.checksum = /SHA-256|校验不一致/.test(error.message);
+      error.checksum = data.code === "checksum_mismatch" || /SHA-256|校验不一致/.test(error.message);
+      error.format = data.code === "fastq_invalid";
       throw error;
     }
     return data;
@@ -338,7 +339,7 @@
         lane.sessionId = upload.id;
         lane.status = "completed";
         lane.loadedPercent = 100;
-        lane.detailText = "SHA-256 已核对";
+        lane.detailText = "SHA-256 和 FASTQ 记录已核对";
         renderLane(lane);
         updateReady();
         return;
@@ -370,7 +371,7 @@
       }
       if (generation !== lane.generation) return;
       lane.loadedPercent = 99;
-      lane.detailText = "正在校验 SHA-256";
+      lane.detailText = "正在校验 SHA-256 和 FASTQ 记录";
       renderLane(lane);
       const completed = await api(`/api/uploads/${encodeURIComponent(upload.id)}/complete`, {
         method: "POST",
@@ -381,17 +382,17 @@
       lane.sessionId = completed.upload.id;
       lane.status = "completed";
       lane.loadedPercent = 100;
-      lane.detailText = "SHA-256 已核对";
+      lane.detailText = "SHA-256 和 FASTQ 记录已核对";
       renderLane(lane);
       updateReady();
     } catch (error) {
       if (generation !== lane.generation || error.aborted) return;
       lane.status = "interrupted";
-      lane.checksumFailed = Boolean(error.checksum);
-      if (error.checksum) {
+      lane.checksumFailed = Boolean(error.checksum || error.format);
+      if (error.checksum || error.format) {
         sessionStorage.removeItem(storageKey(lane.role, file));
         lane.sessionId = null;
-        lane.detailText = "SHA-256 校验未通过。请重新选择文件后再上传。";
+        lane.detailText = error.message;
       } else {
         lane.detailText = "点「继续上传」，从缺失分片继续。";
       }

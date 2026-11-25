@@ -127,6 +127,29 @@
     if (running) elapsedTimer = window.setInterval(draw, 1000);
   }
 
+  function renderPhase(job) {
+    const phase = document.querySelector("#phase-times");
+    const started = document.querySelector("#phase-started");
+    const cancel = document.querySelector("#phase-cancel");
+    const archived = document.querySelector("#phase-archived");
+    const beat = document.querySelector("#worker-beat");
+    if (phase && started && cancel && archived) {
+      phase.hidden = !(job.started_at || job.cancel_requested_at || job.archived_at);
+      started.textContent = job.started_at || "尚未开始";
+      cancel.textContent = job.cancel_requested_at || "没有";
+      archived.textContent = job.archived_at || "尚未发布下载";
+    }
+    if (!beat) return;
+    const live = job.status === "running" || job.status === "cancelling";
+    beat.hidden = !live;
+    if (!live) return;
+    const attempt = job.attempt || 1;
+    const group = job.process_group_id ? ` · 进程组 ${job.process_group_id}` : "";
+    beat.textContent = (job.heartbeat_at
+      ? `第 ${attempt} 次执行 · 最近心跳 ${job.heartbeat_at}`
+      : `第 ${attempt} 次执行`) + group;
+  }
+
   function render(job) {
     const progress = job.progress;
     const current = progress.current || {};
@@ -155,6 +178,7 @@
     if (partialNote) {
       partialNote.hidden = !(job.status === "cancelled" && !job.archive_available);
     }
+    renderPhase(job);
     renderRail(progress.groups || []);
     bindElapsed(job);
     if (job.detail) {

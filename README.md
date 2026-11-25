@@ -8,7 +8,7 @@
 docker build -t bacterial-assembly:latest .
 ```
 
-镜像只安装软件环境，不包含流程和 Web 代码。其中固定使用 fastp 0.23.4、SPAdes 3.15.5、Unicycler 0.5.1、Shovill 1.4.2、SKESA 2.5.1、MEGAHIT 1.2.9、QUAST 5.2.0，以及 Flask/Gunicorn。由于 Bioconda 的 Unicycler 配方要求 SPAdes 4.0.0 以上，而 Shovill 配方要求 SPAdes 4 以下，镜像在独立环境中安装 Unicycler/SPAdes 4.0.0；其余流程使用 SPAdes 3.15.5。
+镜像只安装软件环境，不包含流程和 Web 代码。其中固定使用 fastp 0.23.4、SPAdes 3.15.5、Unicycler 0.5.1、Shovill 1.4.2、SKESA 2.5.1、MEGAHIT 1.2.9、QUAST 5.2.0、ValidateFastq 0.1.1、OpenJDK 8，以及 Flask/Gunicorn。分片上传在 SHA-256 一致之后、进入可分析状态之前，用 ValidateFastq 检查这一份 FASTQ 的记录。由于 Bioconda 的 Unicycler 配方要求 SPAdes 4.0.0 以上，而 Shovill 配方要求 SPAdes 4 以下，镜像在独立环境中安装 Unicycler/SPAdes 4.0.0；其余流程使用 SPAdes 3.15.5。
 
 ## 运行
 

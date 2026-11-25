@@ -48,8 +48,10 @@ from web.reports import (
 )
 from web.errors import (
     DISK_FULL,
+    FASTQ_CHECK_UNAVAILABLE,
     FASTQ_EMPTY,
     FASTQ_INVALID,
+    FASTQ_RECORDS,
     INTERNAL,
     PARAMETER_KMER,
     PARAMETER_THREADS,
@@ -57,6 +59,7 @@ from web.errors import (
     UPLOAD_FAILED,
     parameter_message,
 )
+from web.fastq_check import FastqCheckUnavailable, FastqRecordError, check_fastq_records
 from web.host_monitor import format_bytes, snapshot
 from web.modules import ANALYSIS_MODULES, BACTERIAL_ASSEMBLY_MODULE_ID, group_enabled_modules
 from web.notices import note_disk, note_job
@@ -105,13 +108,20 @@ CREATE TABLE IF NOT EXISTS jobs (
     error TEXT,
     cancel_requested INTEGER NOT NULL DEFAULT 0,
     worker_pid INTEGER,
+    process_group_id INTEGER,
+    process_started_at TEXT,
     rerun_of TEXT,
     sample_id TEXT,
     sequencing_batch_id TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     started_at TEXT,
-    completed_at TEXT
+    completed_at TEXT,
+    attempt INTEGER NOT NULL DEFAULT 0,
+    heartbeat_at TEXT,
+    worker_id TEXT,
+    cancel_requested_at TEXT,
+    archived_at TEXT
 );
 CREATE INDEX IF NOT EXISTS jobs_owner_sequence ON jobs(owner, sequence DESC);
 CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(status, sequence);
@@ -321,6 +331,22 @@ def ensure_rerun_column(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE jobs ADD COLUMN rerun_of TEXT")
 
 
+def ensure_lifecycle_columns(db: sqlite3.Connection) -> None:
+    columns = {info[1] for info in db.execute("PRAGMA table_info(jobs)")}
+    statements = {
+        "attempt": "ALTER TABLE jobs ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0",
+        "heartbeat_at": "ALTER TABLE jobs ADD COLUMN heartbeat_at TEXT",
+        "worker_id": "ALTER TABLE jobs ADD COLUMN worker_id TEXT",
+        "cancel_requested_at": "ALTER TABLE jobs ADD COLUMN cancel_requested_at TEXT",
+        "archived_at": "ALTER TABLE jobs ADD COLUMN archived_at TEXT",
+        "process_group_id": "ALTER TABLE jobs ADD COLUMN process_group_id INTEGER",
+        "process_started_at": "ALTER TABLE jobs ADD COLUMN process_started_at TEXT",
+    }
+    for name, statement in statements.items():
+        if name not in columns:
+            db.execute(statement)
+
+
 def ensure_sample_columns(db: sqlite3.Connection) -> None:
     columns = {info[1] for info in db.execute("PRAGMA table_info(jobs)")}
     if "sample_id" not in columns:
@@ -437,6 +463,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_cancellation_schema(db)
         ensure_rerun_column(db)
         ensure_sample_columns(db)
+        ensure_lifecycle_columns(db)
         db.commit()
     finally:
         db.close()
@@ -512,6 +539,8 @@ def create_app(test_config: dict | None = None) -> Flask:
             return fail("upload_incomplete", text, 400)
         if "分片" in text:
             return fail("upload_failed", "文件上传错误。{}".format(text), 400)
+        if text == FASTQ_RECORDS:
+            return fail("fastq_invalid", FASTQ_RECORDS, 400)
         if "empty" in text.lower() or "FASTQ" in text:
             return fail("fastq_invalid", FASTQ_EMPTY, 400)
         return fail("upload_invalid", text, 400)
@@ -1154,6 +1183,22 @@ def create_app(test_config: dict | None = None) -> Flask:
                     (row["id"], session["username"]),
                 )
             return fail("checksum_mismatch", "SHA-256 校验不一致。", 400)
+        try:
+            check_fastq_records(staged, app.config.get("FASTQ_CHECK_COMMAND"))
+        except FastqRecordError:
+            staged.unlink(missing_ok=True)
+            with connection() as db:
+                db.execute(
+                    "UPDATE uploads SET status = 'failed', sha256 = NULL, assembled_path = NULL, "
+                    "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
+                    "WHERE id = ? AND owner = ?",
+                    (row["id"], session["username"]),
+                )
+            return fail("fastq_invalid", FASTQ_RECORDS, 400)
+        except FastqCheckUnavailable:
+            staged.unlink(missing_ok=True)
+            app.logger.exception("Could not check uploaded FASTQ records")
+            return fail("resource_unavailable", FASTQ_CHECK_UNAVAILABLE, 503)
         validated_dir = app.config["UPLOAD_VALIDATED"] / directory.name
         destination = validated_dir / staged.name
         try:
@@ -1320,6 +1365,8 @@ def create_app(test_config: dict | None = None) -> Flask:
                     or not incoming_paths[1].stat().st_size
                 ):
                     raise ValueError("FASTQ uploads cannot be empty.")
+                for incoming in incoming_paths:
+                    check_fastq_records(incoming, app.config.get("FASTQ_CHECK_COMMAND"))
                 validated_dir.mkdir(parents=True)
                 for source, destination in zip(incoming_paths, validated_paths):
                     relocate_file(source, destination)
@@ -1386,6 +1433,11 @@ def create_app(test_config: dict | None = None) -> Flask:
             restore_staged_reads()
             discard_stored_files(stored_files, stored_dirs)
             return storage_error(error, "Could not save uploaded FASTQ files")
+        except FastqCheckUnavailable:
+            restore_staged_reads()
+            discard_stored_files(stored_files, stored_dirs)
+            app.logger.exception("Could not check uploaded FASTQ records")
+            return fail("resource_unavailable", FASTQ_CHECK_UNAVAILABLE, 503)
         except ValueError as error:
             restore_staged_reads()
             discard_stored_files(stored_files, stored_dirs)
@@ -1425,9 +1477,9 @@ def create_app(test_config: dict | None = None) -> Flask:
             if status == "queued":
                 updated = db.execute(
                     "UPDATE jobs SET status = 'cancelled', cancel_requested = 1, "
-                    "updated_at = ?, completed_at = ? "
+                    "cancel_requested_at = ?, updated_at = ?, completed_at = ? "
                     "WHERE id = ? AND owner = ? AND status = 'queued'",
-                    (timestamp, timestamp, job_id, session["username"]),
+                    (timestamp, timestamp, timestamp, job_id, session["username"]),
                 )
                 if updated.rowcount == 1:
                     note_job(db, row["owner"], row["sample"], job_id, "cancelled")
@@ -1450,9 +1502,9 @@ def create_app(test_config: dict | None = None) -> Flask:
                 if status in ("succeeded", "failed", "cancelled", "cancelling"):
                     return fail("cancel_rejected", "这个任务已经不能取消。", 409)
             updated = db.execute(
-                "UPDATE jobs SET cancel_requested = 1, updated_at = ? "
+                "UPDATE jobs SET cancel_requested = 1, cancel_requested_at = ?, updated_at = ? "
                 "WHERE id = ? AND owner = ? AND status = 'running'",
-                (timestamp, job_id, session["username"]),
+                (timestamp, timestamp, job_id, session["username"]),
             )
             if updated.rowcount != 1:
                 return fail("cancel_rejected", "这个任务已经不能取消。", 409)
@@ -2290,6 +2342,13 @@ def serialize_job(row: sqlite3.Row) -> dict:
         "updated_at": row["updated_at"],
         "started_at": row["started_at"],
         "completed_at": row["completed_at"],
+        "attempt": column_value(row, "attempt") or 0,
+        "heartbeat_at": column_value(row, "heartbeat_at"),
+        "worker_id": column_value(row, "worker_id"),
+        "cancel_requested_at": column_value(row, "cancel_requested_at"),
+        "archived_at": column_value(row, "archived_at"),
+        "process_group_id": column_value(row, "process_group_id"),
+        "process_started_at": column_value(row, "process_started_at"),
         "error": row["error"],
     }
 

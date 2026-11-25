@@ -29,7 +29,16 @@ from scripts.common import cpu_share
 from scripts.stage_record import StageRecord
 from web.app import SCHEMA, create_app, elapsed_seconds, format_duration
 from web.errors import explain_job_failure
-from web.worker import process_next_job, stop_process_group
+from web.fastq_check import records_accepted
+from web.worker import (
+    claim_next_job,
+    process_next_job,
+    publish_directory,
+    read_process,
+    recover_interrupted_jobs,
+    stop_process_group,
+    transition_job,
+)
 
 
 class WebWorkbenchTests(unittest.TestCase):
@@ -48,6 +57,11 @@ class WebWorkbenchTests(unittest.TestCase):
             "print('mock analysis complete', flush=True)\n",
             encoding="utf-8",
         )
+        self.fastq_check = self.root / "fastq_check.py"
+        self.fastq_check.write_text(
+            "print('Done processing 1 fastq records, no errors found')\n",
+            encoding="utf-8",
+        )
         self.app = create_app(
             {
                 "TESTING": True,
@@ -59,6 +73,7 @@ class WebWorkbenchTests(unittest.TestCase):
                 },
                 "DATA_ROOT": self.root / "data",
                 "PIPELINE_PATH": self.pipeline,
+                "FASTQ_CHECK_COMMAND": [sys.executable, str(self.fastq_check)],
             }
         )
         self.client = self.app.test_client()
@@ -639,6 +654,62 @@ class WebWorkbenchTests(unittest.TestCase):
             headers={"X-CSRF-Token": token},
         )
 
+    def test_fastq_record_check_requires_a_clean_log(self):
+        self.assertTrue(records_accepted(0, "Done processing 2 fastq records, no errors found\nDone"))
+        self.assertFalse(
+            records_accepted(0, "Error found at readnumber: 1, linenumber 1\nDone")
+        )
+        self.assertFalse(records_accepted(1, "Done processing 2 fastq records, no errors found"))
+        self.assertFalse(records_accepted(0, "Done"))
+
+    def test_completed_upload_rejects_fastq_records(self):
+        token = self.login(self.client)
+        payload = b"@r1\nACGTACGT\n+\nIIIIIIII\n"
+        upload = self.store_chunks(self.client, token, "reads_R1.fastq", "r1", payload)
+        self.fastq_check.write_text(
+            "import sys\n"
+            "print('Error found at readnumber: 1, linenumber 1', file=sys.stderr)\n"
+            "print('Done')\n",
+            encoding="utf-8",
+        )
+        rejected = self.finish_upload(
+            self.client, token, upload["id"], hashlib.sha256(payload).hexdigest()
+        )
+        self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(rejected.json["code"], "fastq_invalid")
+        self.assertIn("记录无法通过检查", rejected.json["error"])
+        validated = self.app.config["UPLOAD_VALIDATED"] / upload["id"] / "read.fastq"
+        self.assertFalse(validated.exists())
+        status = self.client.get("/api/uploads/{}".format(upload["id"]))
+        self.assertEqual(status.json["upload"]["status"], "failed")
+        self.assertIsNone(status.json["upload"]["sha256"])
+        created = self.client.post(
+            "/api/jobs",
+            data={
+                "csrf_token": token,
+                "assembler_order": '["spades"]',
+                "assembler": ["spades"],
+                "sample": "isolate_17",
+                "r1_session": upload["id"],
+                "r2_session": upload["id"],
+            },
+            headers={"X-CSRF-Token": token},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(created.status_code, 400)
+
+    def test_direct_upload_rejects_fastq_records_before_queue(self):
+        token = self.login(self.client)
+        self.fastq_check.write_text(
+            "import sys\nprint('Error found at readnumber: 1', file=sys.stderr)\n",
+            encoding="utf-8",
+        )
+        rejected = self.submit_job(self.client, token, ("spades",))
+        self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(rejected.json["code"], "fastq_invalid")
+        self.assertIn("记录无法通过检查", rejected.json["error"])
+        self.assertFalse(any(self.app.config["JOBS_ROOT"].rglob("R1.fastq*")))
+
     def test_chunk_assemble_rejects_sha256_mismatch(self):
         token = self.login(self.client)
         payload = b"@r1\nACGTACGT\n+\nIIIIIIII\n"
@@ -1132,6 +1203,8 @@ class WebWorkbenchTests(unittest.TestCase):
             columns = {record[1] for record in db.execute("PRAGMA table_info(jobs)")}
         self.assertEqual(row, ("cancelled", 0))
         self.assertIn("worker_pid", columns)
+        self.assertIn("process_group_id", columns)
+        self.assertIn("process_started_at", columns)
 
     def test_notices_follow_the_job_owner_through_worker_transitions(self):
         token = self.login(self.client)
@@ -1893,6 +1966,151 @@ class WebWorkbenchTests(unittest.TestCase):
         blocked = self.client.get("/api/jobs/{}/reports/tsv".format(job_id))
         self.assertEqual(blocked.status_code, 404)
         self.assertNotIn(b"TOPSECRET-REPORT", blocked.data)
+
+
+    def test_status_changes_only_from_the_allowed_state(self):
+        token = self.login(self.client)
+        created = self.submit_job(self.client, token, order=("spades",))
+        self.assertEqual(created.status_code, 202)
+        job_id = created.json["job"]["id"]
+        queued = self.client.get("/api/jobs/{}".format(job_id)).json["job"]
+        self.assertIsNone(queued["completed_at"])
+        self.assertIsNone(queued["archived_at"])
+        self.assertFalse(queued["archive_available"])
+
+        claimed = claim_next_job(self.app.config["DATABASE"])
+        self.assertEqual(claimed["id"], job_id)
+        running = self.client.get("/api/jobs/{}".format(job_id)).json["job"]
+        self.assertEqual(running["status"], "running")
+        self.assertEqual(running["attempt"], 1)
+        self.assertIsNone(running["completed_at"])
+        self.assertTrue(running["worker_id"])
+        self.assertTrue(running["heartbeat_at"])
+        with closing(sqlite3.connect(self.app.config["DATABASE"])) as db:
+            db.execute("UPDATE jobs SET status = 'cancelling' WHERE id = ?", (job_id,))
+            db.commit()
+        self.assertFalse(
+            transition_job(
+                self.app.config["DATABASE"],
+                job_id,
+                "succeeded",
+                ("running",),
+                archive_path="/tmp/not-published.tar.gz",
+            )
+        )
+        not_archived = self.client.get("/api/jobs/{}".format(job_id)).json["job"]
+        self.assertEqual(not_archived["status"], "cancelling")
+        self.assertIsNone(not_archived["archived_at"])
+        self.assertIsNone(not_archived["completed_at"])
+        self.assertFalse(not_archived["archive_available"])
+
+        recover_interrupted_jobs(self.app.config["DATABASE"])
+        cancelled_early = self.client.get("/api/jobs/{}".format(job_id)).json["job"]
+        self.assertEqual(cancelled_early["status"], "cancelled")
+        self.assertIsNotNone(cancelled_early["completed_at"])
+
+        logged_cancel = self.insert_owned_job("alice", "logged_cancel", "running", "2026-01-02T00:00:00Z")
+        log_path = self.app.config["JOBS_ROOT"] / logged_cancel / "logs" / "job.log"
+        log_path.write_text("STATUS: running\nSTATUS: cancelled\n", encoding="utf-8")
+        recover_interrupted_jobs(self.app.config["DATABASE"])
+        cancelled = self.client.get("/api/jobs/{}".format(logged_cancel)).json["job"]
+        self.assertEqual(cancelled["status"], "cancelled")
+        self.assertIsNotNone(cancelled["completed_at"])
+        self.assertIsNotNone(cancelled["cancel_requested_at"])
+
+    def test_publish_leaves_the_final_directory_until_staging_finishes(self):
+        source = self.root / "stage-work"
+        destination = self.root / "stage-output"
+        source.mkdir()
+        (source / "contigs.fasta").write_text(">a\n", encoding="utf-8")
+        destination.mkdir()
+        (destination / "keep.txt").write_text("stay", encoding="utf-8")
+        with self.assertRaises(RuntimeError):
+            publish_directory(source, destination)
+        self.assertEqual((destination / "keep.txt").read_text(encoding="utf-8"), "stay")
+        self.assertFalse((destination / "contigs.fasta").exists())
+        self.assertEqual(
+            (self.root / "stage-output.incoming" / "contigs.fasta").read_text(encoding="utf-8"),
+            ">a\n",
+        )
+
+        ready = self.root / "ready-work"
+        empty = self.root / "empty-output"
+        ready.mkdir()
+        empty.mkdir()
+        (ready / "comparison.tsv").write_text("ok\n", encoding="utf-8")
+        publish_directory(ready, empty)
+        self.assertEqual((empty / "comparison.tsv").read_text(encoding="utf-8"), "ok\n")
+        self.assertFalse((self.root / "empty-output.incoming").exists())
+        self.assertFalse(any(ready.iterdir()))
+
+    def test_recovery_checks_process_group_before_signalling(self):
+        self.login(self.client)
+        reused = self.insert_owned_job("alice", "reused_pid", "running", "2026-01-03T00:00:00Z")
+        with closing(sqlite3.connect(self.app.config["DATABASE"])) as db:
+            db.execute(
+                "UPDATE jobs SET worker_pid = ?, process_group_id = ?, process_started_at = ? WHERE id = ?",
+                (os.getpid(), os.getpgrp(), "not-the-live-start", reused),
+            )
+            db.commit()
+        recover_interrupted_jobs(self.app.config["DATABASE"])
+        os.kill(os.getpid(), 0)
+        failed = self.client.get("/api/jobs/{}".format(reused)).json["job"]
+        self.assertEqual(failed["status"], "failed")
+        reused_log = (self.app.config["JOBS_ROOT"] / reused / "logs" / "job.log").read_text(encoding="utf-8")
+        self.assertIn("did not signal it", reused_log)
+
+        job_id = self.insert_owned_job("alice", "live_group", "running", "2026-01-04T00:00:00Z")
+        script = self.root / "hold_group.py"
+        grandchild = self.root / "held-grandchild.pid"
+        ready = self.root / "held.ready"
+        script.write_text(
+            "import os, signal, sys, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "grandchild, ready = sys.argv[-2], sys.argv[-1]\n"
+            "child = os.fork()\n"
+            "if child == 0:\n"
+            "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "    open(grandchild, 'w').write(str(os.getpid()))\n"
+            "    while True:\n"
+            "        time.sleep(0.05)\n"
+            "open(ready, 'w').write('ready')\n"
+            "os.wait()\n",
+            encoding="utf-8",
+        )
+        process = subprocess.Popen(
+            [sys.executable, str(script), "--job-id", job_id, str(grandchild), str(ready)],
+            start_new_session=True,
+        )
+        try:
+            deadline = time.time() + 5
+            while time.time() < deadline and not (ready.is_file() and grandchild.is_file()):
+                time.sleep(0.02)
+            self.assertTrue(grandchild.is_file())
+            snap = read_process(process.pid)
+            self.assertIsNotNone(snap)
+            self.assertEqual(snap["pgid"], process.pid)
+            self.assertIn(job_id, snap["command"])
+            with closing(sqlite3.connect(self.app.config["DATABASE"])) as db:
+                db.execute(
+                    "UPDATE jobs SET worker_pid = ?, process_group_id = ?, process_started_at = ? WHERE id = ?",
+                    (process.pid, snap["pgid"], snap["start"], job_id),
+                )
+                db.commit()
+            recover_interrupted_jobs(self.app.config["DATABASE"])
+            process.wait(timeout=3)
+            with self.assertRaises(OSError):
+                os.kill(int(grandchild.read_text(encoding="utf-8")), 0)
+        finally:
+            if process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                process.wait(timeout=2)
+        finished = self.client.get("/api/jobs/{}".format(job_id)).json["job"]
+        self.assertEqual(finished["status"], "failed")
+        self.assertIsNone(finished["process_group_id"])
 
 
 if __name__ == "__main__":

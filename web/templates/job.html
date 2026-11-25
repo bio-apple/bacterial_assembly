@@ -55,6 +55,21 @@
         <dd><time id="stage-updated" datetime="{{ progress.updated_at or '' }}">{{ progress.updated_at or "—" }}</time></dd>
       </div>
     </dl>
+    <dl class="record-grid phase-times" id="phase-times"{% if not job.started_at and not job.cancel_requested_at and not job.archived_at %} hidden{% endif %}>
+      <div>
+        <dt>开始执行</dt>
+        <dd id="phase-started">{{ job.started_at or "尚未开始" }}</dd>
+      </div>
+      <div>
+        <dt>请求取消</dt>
+        <dd id="phase-cancel">{{ job.cancel_requested_at or "没有" }}</dd>
+      </div>
+      <div>
+        <dt>归档完成</dt>
+        <dd id="phase-archived">{{ job.archived_at or "尚未发布下载" }}</dd>
+      </div>
+    </dl>
+    <p id="worker-beat" class="report-note"{% if job.status not in ("running", "cancelling") %} hidden{% endif %}>第 {{ job.attempt or 1 }} 次执行{% if job.heartbeat_at %} · 最近心跳 {{ job.heartbeat_at }}{% endif %}{% if job.process_group_id %} · 进程组 {{ job.process_group_id }}{% endif %}</p>
     <p id="job-error" class="monitor-error"{% if not job.error %} hidden{% endif %}>{{ job.error or "" }}</p>
 
     <section class="monitor-block" aria-labelledby="sample-title">

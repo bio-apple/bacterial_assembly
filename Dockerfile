@@ -12,6 +12,8 @@ RUN micromamba install --yes --name base \
     quast=5.2.0 \
     flask=3.1.1 \
     gunicorn=23.0.0 \
+    openjdk=8 \
+    biopet-validatefastq=0.1.1 \
     && micromamba create --yes --name unicycler \
         --channel conda-forge \
         --channel bioconda \
