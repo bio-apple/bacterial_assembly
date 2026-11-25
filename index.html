@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>bacterial_assembly · Illumina 短读长细菌基因组组装</title>
+    <meta
+      name="description"
+      content="面向 Illumina 双端 FASTQ：fastp、多种组装方法、QUAST 评估。宿主机 Web/Worker，生信工具 Docker 侧车。"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --ink: #0b1f24;
+        --fog: #e6f2f0;
+        --gel: #0d3d38;
+        --band: #2ec4b6;
+        --band-dim: #1a7a72;
+        --lane: #062825;
+        --paper: #f4fbf9;
+        --muted: #5a7572;
+        --accent: #c8f560;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+      }
+
+      body {
+        font-family: Sora, system-ui, sans-serif;
+        color: var(--fog);
+        background: var(--ink);
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .hero {
+        position: relative;
+        min-height: 100vh;
+        min-height: 100dvh;
+        display: grid;
+        align-content: end;
+        padding: clamp(1.5rem, 4vw, 3rem);
+        overflow: hidden;
+        isolation: isolate;
+      }
+
+      .gel {
+        position: absolute;
+        inset: 0;
+        z-index: -2;
+        background:
+          radial-gradient(ellipse 80% 50% at 70% 20%, rgba(46, 196, 182, 0.18), transparent 55%),
+          linear-gradient(165deg, #061618 0%, var(--gel) 45%, #041210 100%);
+      }
+
+      .gel::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        opacity: 0.55;
+        background-image: repeating-linear-gradient(
+          90deg,
+          transparent 0,
+          transparent calc(12.5% - 1px),
+          rgba(6, 40, 37, 0.85) calc(12.5% - 1px),
+          rgba(6, 40, 37, 0.85) 12.5%
+        );
+        mask-image: linear-gradient(to bottom, transparent 8%, #000 22%, #000 88%, transparent);
+      }
+
+      .bands {
+        position: absolute;
+        inset: 12% 6% 18%;
+        z-index: -1;
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+        gap: 0;
+        pointer-events: none;
+      }
+
+      .bands span {
+        position: relative;
+        margin: 0 auto;
+        width: 42%;
+        border-radius: 2px;
+        background: linear-gradient(90deg, transparent, var(--band), transparent);
+        box-shadow: 0 0 18px rgba(46, 196, 182, 0.35);
+        animation: settle 1.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+      }
+
+      .bands span:nth-child(1) {
+        height: 3%;
+        top: 18%;
+        animation-delay: 0.05s;
+      }
+      .bands span:nth-child(2) {
+        height: 5%;
+        top: 28%;
+        animation-delay: 0.12s;
+        opacity: 0.75;
+      }
+      .bands span:nth-child(3) {
+        height: 2.5%;
+        top: 22%;
+        animation-delay: 0.18s;
+      }
+      .bands span:nth-child(4) {
+        height: 7%;
+        top: 40%;
+        animation-delay: 0.08s;
+        background: linear-gradient(90deg, transparent, var(--accent), transparent);
+        box-shadow: 0 0 22px rgba(200, 245, 96, 0.3);
+      }
+      .bands span:nth-child(5) {
+        height: 4%;
+        top: 34%;
+        animation-delay: 0.22s;
+        opacity: 0.85;
+      }
+      .bands span:nth-child(6) {
+        height: 6%;
+        top: 48%;
+        animation-delay: 0.15s;
+      }
+      .bands span:nth-child(7) {
+        height: 3%;
+        top: 30%;
+        animation-delay: 0.28s;
+      }
+      .bands span:nth-child(8) {
+        height: 5%;
+        top: 55%;
+        animation-delay: 0.2s;
+        opacity: 0.7;
+      }
+
+      @keyframes settle {
+        from {
+          transform: translateY(-28vh);
+          opacity: 0;
+        }
+        to {
+          transform: translateY(0);
+          opacity: 1;
+        }
+      }
+
+      .brand {
+        font-family: "IBM Plex Mono", ui-monospace, monospace;
+        font-size: clamp(0.75rem, 1.6vw, 0.9rem);
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: lowercase;
+        margin: 0 0 1.25rem;
+        color: var(--accent);
+      }
+
+      h1 {
+        margin: 0 0 1rem;
+        max-width: 14ch;
+        font-size: clamp(2.4rem, 7vw, 4.6rem);
+        font-weight: 700;
+        line-height: 1.05;
+        letter-spacing: -0.03em;
+      }
+
+      .lede {
+        margin: 0 0 2rem;
+        max-width: 36rem;
+        font-size: clamp(1rem, 2.2vw, 1.2rem);
+        font-weight: 500;
+        line-height: 1.55;
+        color: rgba(230, 242, 240, 0.82);
+      }
+
+      .cta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem 1rem;
+      }
+
+      .cta a {
+        display: inline-flex;
+        align-items: center;
+        min-height: 2.75rem;
+        padding: 0 1.15rem;
+        border-radius: 999px;
+        font-size: 0.95rem;
+        font-weight: 600;
+        text-decoration: none;
+        transition: transform 0.2s ease, background 0.2s ease, color 0.2s ease;
+      }
+
+      .cta a:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+      }
+
+      .cta a.primary {
+        background: var(--accent);
+        color: var(--ink);
+      }
+
+      .cta a.primary:hover {
+        transform: translateY(-1px);
+        background: #d8ff7a;
+      }
+
+      .cta a.ghost {
+        border: 1px solid rgba(230, 242, 240, 0.35);
+        color: var(--fog);
+      }
+
+      .cta a.ghost:hover {
+        border-color: var(--band);
+        color: var(--band);
+      }
+
+      .copy {
+        max-width: 40rem;
+        animation: rise 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.15s both;
+      }
+
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(1.25rem);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .bands span,
+        .copy {
+          animation: none;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .hero {
+          align-content: center;
+        }
+        h1 {
+          max-width: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="hero">
+      <div class="gel" aria-hidden="true"></div>
+      <div class="bands" aria-hidden="true">
+        <span></span><span></span><span></span><span></span>
+        <span></span><span></span><span></span><span></span>
+      </div>
+      <div class="copy">
+        <p class="brand">bacterial_assembly</p>
+        <h1>Illumina 短读长细菌基因组组装</h1>
+        <p class="lede">
+          双端 FASTQ → fastp → 多种组装方法 → QUAST。Web 与 Worker 跑在宿主机，生信工具跑在 Docker 侧车。
+        </p>
+        <div class="cta">
+          <a class="primary" href="https://github.com/bio-apple/bacterial_assembly">查看仓库</a>
+          <a class="ghost" href="https://github.com/bio-apple/bacterial_assembly/blob/main/docs/host_deployment.md"
+            >部署说明</a
+          >
+        </div>
+      </div>
+    </main>
+  </body>
+</html>

@@ -1,5 +1,7 @@
 # 基于 NGS 的细菌基因组组装流程
 
+项目页：[https://bio-apple.github.io/bacterial_assembly/](https://bio-apple.github.io/bacterial_assembly/)
+
 面向单个 Illumina 双端 FASTQ 样本：fastp 过滤与报告、一种或多种组装方法、成功组装上的 QUAST 无参考评估与指标汇总。至少选择一种组装方法；不依据生物学准则判定样本失败，也不根据 N50 自动推荐最佳组装。
 
 ## 核心能力
