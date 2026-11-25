@@ -23,18 +23,18 @@ CLI 退出码：全部成功 `0`，部分成功 `3`，全部失败或前置失�
 
 ## 支持的软件与版本
 
+生信工具在侧车镜像中运行（见 [docs/docker_tools.md](docs/docker_tools.md)）：
+
 | 软件 | 版本 |
 | --- | --- |
 | fastp | 0.23.4 |
-| SPAdes | 3.15.5（base）；Unicycler 环境为 4.0.0 |
-| Unicycler | 0.5.1 |
+| SPAdes | 3.15.5 |
+| Unicycler | 0.5.1（镜像内含 SPAdes 4.0.0） |
 | Shovill / SKESA | 1.4.2 / 2.5.1 |
 | MEGAHIT | 1.2.9 |
 | QUAST | 5.2.0 |
-| ValidateFastq / OpenJDK | 0.1.1 / 8 |
-| Flask / Gunicorn | 3.1.1 / 23.0.0 |
 
-完整安装说明见 [docs/installation.md](docs/installation.md)。
+应用镜像含 ValidateFastq 0.1.1、OpenJDK 8、Flask 3.1.1、Gunicorn 23.0.0。完整说明见 [docs/installation.md](docs/installation.md)。
 
 ## 安装与快速开始
 
@@ -100,4 +100,3 @@ docker run --rm \
 | [docs/references.md](docs/references.md) | 软件文档链接 |
 | [CONTEXT.md](CONTEXT.md) | 领域术语 |
 | [docs/adr/](docs/adr/) | 架构决策 |
-| [CHANGELOG.md](CHANGELOG.md) | 变更记录 |

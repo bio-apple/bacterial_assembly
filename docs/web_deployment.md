@@ -70,9 +70,9 @@ data/
 | `cancelling` | 取消中 |
 | `cancelled` | 已取消 |
 
-全部组装方法成功为已完成；至少一种成功且至少一种失败为部分完成（可下载已有结果）。可取消 `queued` 或 `running`。任务状态描述整次分析；单方法成败见 `assembly_outcome.json` 与步骤记录。
+全部组装方法成功为已完成；至少一种成功且至少一种失败为部分完成（可下载已有结果）。可取消 `queued` 或 `running`。任务状态描述整次分析；单方法成败见 `assembly_outcome.json` 与步骤记录（任务页步骤读模型见 [architecture.md](architecture.md) / CONTEXT）。
 
-`/history` 按账号隔离；可下载结果或日志；重新分析会新建任务。
+`/history` 按账号隔离；可下载结果或日志。重新分析新建任务；`TASK_BACKEND=postgres_rq` 时创建与重新分析均经 `enqueue_rq_pipeline` 入队。
 
 ## 模块扩展
 

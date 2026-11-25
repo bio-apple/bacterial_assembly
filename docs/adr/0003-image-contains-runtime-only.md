@@ -1,7 +1,7 @@
 ---
-status: superseded by ADR-0010
+status: accepted
 ---
 
-# 应用镜像含运行依赖
+# 应用镜像仅含运行依赖
 
-应用镜像基于 `anaconda/miniconda`，安装运行依赖（含可选本地生信二进制以支持 `TOOL_RUNTIME=local`），不把仓库源码打进镜像。运行时只读挂载仓库到 `/opt/bacterial-assembly`。生信正式执行使用独立工具镜像（ADR 0010）。构建与运行按 `linux/amd64`。
+应用镜像基于 `anaconda/miniconda`，安装 Web/Worker 运行依赖（Python、Flask、Gunicorn、编排库）与上传校验用的 ValidateFastq / OpenJDK。不内嵌 fastp、组装软件或 QUAST；生信步骤在工具侧车镜像中执行（ADR 0010）。不把仓库源码打进镜像；运行时只读挂载仓库到 `/opt/bacterial-assembly`。构建与运行按 `linux/amd64`。

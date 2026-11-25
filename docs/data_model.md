@@ -5,11 +5,13 @@
 | 存储 | 内容 |
 | --- | --- |
 | PostgreSQL | 分析步骤（`job_steps`）、与步骤调度相关的 `jobs` 行、可选的 samples/uploads/notices 副本 |
-| SQLite `database/jobs.sqlite3` | Web 作业列表、上传、通知、样本等读模型；`TASK_BACKEND=postgres_rq` 时任务终态会写回此库 |
+| SQLite `database/jobs.sqlite3` | Web 作业列表、上传、通知、样本等读模型；`postgres_rq` 下运行中与终态由 Worker/编排镜像写回 |
 | `users.json` | 预配置账号 |
 | 磁盘 `ASSEMBLY_DATA_ROOT` | FASTQ、结果、日志、归档；库中只存路径 |
 
 Redis 只作 RQ 队列，不持久化业务状态。
+
+任务页步骤列表：磁盘 `stages.json` 同步到 SQLite `job_steps`；若表为空则由 `web/step_read_model` 读 PostgreSQL 补齐（见 CONTEXT「步骤读模型」）。
 
 ## PostgreSQL
 
@@ -27,9 +29,9 @@ Schema：`migrations/*.sql`，应用：`python -m web.migrate_pg`。
 
 表定义见 `web/app.py` 中 `SCHEMA`（`jobs`、`job_steps`、`uploads`、`notices`、`samples`、`sequencing_batches`）。启动时用 `ensure_*` 做列/约束补齐。
 
-## 从 SQLite 文件导入 Postgres
+## 导入工具
 
-运维需要把现有 `jobs.sqlite3` 拷进 Postgres 时：
+把现有 `jobs.sqlite3` 写入 Postgres：
 
 ```bash
 # 先备份，再导入（脚本会再写一份带时间戳的备份）

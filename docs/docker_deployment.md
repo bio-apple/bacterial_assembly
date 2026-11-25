@@ -9,7 +9,7 @@
 | `redis` | RQ 队列 |
 | `worker-qc` | fastp、QUAST、summary |
 | `worker-assembly` | SPAdes / Unicycler / Shovill / MEGAHIT |
-| `worker-legacy` | 可选：单进程 `run_pipeline`（Compose profile `legacy-worker`） |
+| `worker-legacy` | 可选：`TASK_BACKEND=sqlite` 时单进程 `run_pipeline`（Compose profile `legacy-worker`） |
 
 宿主机端口：Web `8000`，Postgres `5433`，Redis `6380`。
 
@@ -49,7 +49,10 @@ PYTHONPATH=. python -m web.demo_queue --run-worker
 
 | 模块 | 路径 |
 | --- | --- |
+| 入队 | `web/job_submit.py` |
 | 编排 | `web/orchestrator.py` |
 | 步骤执行 | `web/step_runners.py` |
 | RQ 任务 | `web/rq_jobs.py`、`web/rq_worker.py` |
+| 取消 | `web/rq_cancel.py` |
+| 发布 / 归档 | `web/job_publish.py` |
 | 工具容器 | `scripts/docker_executor.py` |

@@ -13,7 +13,7 @@ fastp、四种组装软件和 QUAST 在独立工具容器中运行。应用进�
 | MEGAHIT | `bacterial-assembly-megahit:1.2.9` |
 | QUAST | `bacterial-assembly-quast:5.2.0` |
 
-配置：`config/software_registry.yaml`。
+配置：`config/software_registry.yaml`（含 Unicycler `bundled_spades_label`）。
 
 ## 构建
 
@@ -21,7 +21,7 @@ fastp、四种组装软件和 QUAST 在独立工具容器中运行。应用进�
 PLATFORM=linux/amd64 ./docker/tools/build.sh
 ```
 
-应用镜像（Flask、依赖、可选本地工具二进制）：
+应用镜像（Flask、编排、ValidateFastq；不含组装/评估二进制）：
 
 ```bash
 docker build --platform linux/amd64 -t bacterial-assembly:latest .
@@ -35,13 +35,15 @@ docker build --platform linux/amd64 -t bacterial-assembly:latest .
 | `DOCKER_GID` | 访问 `/var/run/docker.sock` 的宿主机 docker 组 GID |
 | `_ASSEMBLY_JOB_ID` | 容器标签 `bacterial.assembly.job_id` |
 | `_ASSEMBLY_STEP_NAME` | 容器标签 `bacterial.assembly.step` |
+| `_ASSEMBLY_STEP_ID` | 写入 Postgres `job_steps.container_id` 的步骤主键 |
+| `_ASSEMBLY_ASSIGNED_THREADS` | 工具线程参数 |
 | `_ASSEMBLY_METHOD_MEMORY_GIB` | 工具内存参数；容器 limit = 该值 + 1 GiB |
 
 工具容器：`network_mode=none`、非 privileged、不挂 Docker socket；按任务目录同路径 bind；UID/GID 与数据卷对齐。
 
 ## 调用
 
-`scripts/common.run_command` / `record_version`：注册表内命令且 `TOOL_RUNTIME=docker` 时走 `scripts/docker_executor.py`。contig 过滤与 `summarize_quast.py` 在应用进程内执行。
+`scripts/common.run_command` / `record_version`：注册表内命令且 `TOOL_RUNTIME=docker` 时走 `scripts/docker_executor.py`。contig 文件名与 QUAST 目录约定见 `scripts/pipeline_core.py`。contig 过滤与 `summarize_quast.py` 在应用进程内执行。
 
 ## 取消
 

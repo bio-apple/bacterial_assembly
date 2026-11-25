@@ -27,7 +27,7 @@ Flask / API
 
 - API 不执行生信软件，不等待容器结束。
 - 组装 Worker 与 QC Worker 独立进程，共享同一数据根。
-- 生信软件在白名单工具镜像中运行（见 [docker_tools.md](docker_tools.md)）。
+- 生信软件在白名单工具镜像中运行（见 [docker_tools.md](docker_tools.md)）；应用镜像不含组装/评估二进制。
 
 ## 分析流程
 
@@ -40,7 +40,7 @@ Flask / API
   → 发布 output、可选归档
 ```
 
-CLI 仍可用仓库根目录 `run_pipeline.py` 在本机一次性跑通同一科学流程。
+命令行入口：仓库根目录 `run_pipeline.py`（与 Web 共用 `scripts/pipeline_core` 中的 contig / QUAST 目标约定）。
 
 ## 工作项
 
@@ -51,9 +51,22 @@ CLI 仍可用仓库根目录 `run_pipeline.py` 在本机一次性跑通同一科
 | quast | qc | 同一工作项内三次 `run_quast.py` |
 | summary | qc | `summarize_quast.py` + `assembly_outcome.json` |
 
-编排与入队：`web/orchestrator.py`。Web 创建/重新分析共用：`web/job_submit.enqueue_rq_pipeline`。执行：`web/step_runners.py`。RQ 入口：`web/rq_jobs.py`。归档：`web/job_publish.py`。
+| 职责 | 路径 |
+| --- | --- |
+| 创建 / 重新分析入队 | `web/job_submit.enqueue_rq_pipeline` |
+| 步骤图与依赖 | `web/orchestrator.py` |
+| 步骤执行 | `web/step_runners.py` |
+| RQ 入口 | `web/rq_jobs.py`、`web/rq_worker.py` |
+| 取消 | `web/rq_cancel.py` |
+| SQLite 镜像与步骤读模型 | `web/sqlite_mirror.py`、`web/step_read_model.py` |
+| 发布 / 归档 | `web/job_publish.py` |
+| 路径解析 | `web/job_paths.py` |
+| 工具容器 | `scripts/docker_executor.py` |
+| 组装常量 | `scripts/pipeline_core.py`、`scripts/assembly_outcome.py` |
 
 Redis 消息只带 `step_id` 等调度元数据；路径与参数以 PostgreSQL 与磁盘为准。
+
+`TASK_BACKEND=sqlite` 时由 `web/worker.py` 调用 `run_pipeline.py`（单测默认）；Compose 默认 `postgres_rq`。
 
 ## 状态
 
@@ -64,11 +77,11 @@ Redis 消息只带 `step_id` 等调度元数据；路径与参数以 PostgreSQL 
 - 至少一种组装成功且至少一种失败 → `partial_success`
 - 全部组装成功 → `succeeded`（QUAST 失败不改变该终态；终态以 `assembly_outcome.json` + `finished_status` 裁决）
 - 取消保留已完成产物
-- RQ 路径会把运行中/终态镜像回 SQLite；步骤表优先来自 `stages.json` 同步，空表时由 PostgreSQL 适配器补齐
+- `postgres_rq`：运行中与终态镜像到 SQLite；步骤表优先来自 `stages.json` 同步，空表时由 PostgreSQL 适配器补齐
 
 **工作项**（PostgreSQL `job_steps`）：`pending` | `queued` | `running` | `succeeded` | `failed` | `cancelled` | `skipped`
 
-结果目录另有 `stages.json`、`assembly_outcome.json`（组装成败列表）。工具容器启动后写入 `container_id`；取消按任务标签停止容器；超时未心跳的 `running` 可被回收为失败以便基础设施重试。
+结果目录另有 `stages.json`、`assembly_outcome.json`。工具容器启动后写入 `container_id`；取消按任务标签停止容器；超时未更新的 `running` 可被回收为失败，以便基础设施类重试。
 
 ## 幂等与重试
 
@@ -78,7 +91,7 @@ Redis 消息只带 `step_id` 等调度元数据；路径与参数以 PostgreSQL 
 
 ## 资源
 
-`resource_budget` / `resource_limits`：约 90% CPU/内存写入工具参数；Docker 路径下容器内存上限为配额 + 1 GiB。组装队列默认并发 1。
+`resource_budget` / `resource_limits`：约 90% CPU/内存写入工具参数；RQ Worker 与 CLI 下发 `_ASSEMBLY_ASSIGNED_THREADS`、`_ASSEMBLY_METHOD_MEMORY_GIB`。Docker 路径下容器内存上限为配额 + 1 GiB。组装队列默认并发 1。
 
 ## 数据根
 

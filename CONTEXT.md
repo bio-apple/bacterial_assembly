@@ -111,8 +111,12 @@ _Avoid_: 组装队列
 _Avoid_: 用任务状态代替步骤状态、用 Redis 消息代替步骤状态
 
 **步骤读模型**:
-任务页展示所用的步骤列表与进度视图；`postgres_rq` 下优先同步自磁盘 `stages.json` 与 PostgreSQL，经适配器呈现为与 SQLite `job_steps` 相同的行形态。
+任务页展示所用的步骤列表与进度视图；`postgres_rq` 下由磁盘 `stages.json` 同步到 SQLite，空表时由 PostgreSQL 适配器补齐，行形态与 SQLite `job_steps` 一致。
 _Avoid_: 把 Redis 队列当作步骤读模型
+
+**任务入队**:
+创建分析或重新分析后，在 `TASK_BACKEND=postgres_rq` 下经同一适配器写入 Postgres 步骤并投递首个工作项。
+_Avoid_: 仅写 SQLite 却期望 RQ Worker 执行
 
 **分析模块**:
 面向一种分析目标的一组相关处理步骤，例如细菌基因组组装。
@@ -165,7 +169,7 @@ _Avoid_: 提交时间
 ## 工具执行环境
 
 **应用运行时**:
-运行 Flask、Worker 与编排逻辑的环境；生信软件在工具容器中执行。
+运行 Flask、Worker 与编排逻辑的环境（应用镜像不含组装/评估二进制）；生信软件在工具容器中执行。
 _Avoid_: 工具容器
 
 **工具容器**:
