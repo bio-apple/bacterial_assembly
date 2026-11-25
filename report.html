@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#eff4f2">
+  <title>isolate_07 · 分析报告 · 微生物 NGS 数据分析系统</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@500;600;700&display=swap">
+  <link rel="stylesheet" href="assets/style.css">
+  <link rel="stylesheet" href="assets/demo.css">
+</head>
+<body class="workbench">
+  <div class="demo-banner" role="note">
+    <span><strong>静态预览</strong> · HTML 报告示例</span>
+    <span><a href="job.html">返回任务</a></span>
+  </div>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <header class="topbar">
+    <a class="brand" href="overview.html" aria-label="微生物 NGS 数据分析系统首页">
+      <span class="brand-icon" aria-hidden="true">MN<i></i></span>
+      <span>MICROBIAL <b>NGS</b></span>
+    </a>
+    <nav class="site-nav" aria-label="主要导航">
+      <a class="site-nav-link" href="overview.html">
+        <span class="nav-full">总览</span><span class="nav-short">总览</span>
+      </a>
+      <a class="site-nav-link" href="modules.html">
+        <span class="nav-full">分析模块</span><span class="nav-short">模块</span>
+      </a>
+      <a class="site-nav-link" href="history.html">
+        <span class="nav-full">处理历史</span><span class="nav-short">历史</span>
+      </a>
+    </nav>
+    <div class="topbar-right">
+      <span class="system-state"><i></i> Linux 工作节点</span>
+      <span class="user-tag">demo</span>
+      <a class="text-button" href="login.html">退出</a>
+    </div>
+  </header>
+  <main id="main-content" class="dashboard monitor-page">
+    <header class="monitor-intro">
+      <div>
+        <p class="eyebrow">REPORT / HTML</p>
+        <h1>isolate_07</h1>
+        <p class="monitor-sample">已完成 · HTML 报告。PDF 未提供。</p>
+      </div>
+      <a class="monitor-back" href="job.html">返回任务</a>
+    </header>
+    <p class="report-links">
+      <a href="report.html">下载 HTML</a>
+      <a href="compare.html">查看比较表</a>
+    </p>
+
+    <section class="monitor-block">
+      <h2>样本与测序数据</h2>
+      <dl class="record-grid">
+        <div><dt>样本</dt><dd>isolate_07</dd></div>
+        <div><dt>R1</dt><dd>isolate_07_R1.fastq.gz<span class="checksum">sha256:aa12…88ff</span></dd></div>
+        <div><dt>R2</dt><dd>isolate_07_R2.fastq.gz<span class="checksum">sha256:bb34…99ee</span></dd></div>
+        <div><dt>任务 ID</dt><dd>e5f6a7b8-…</dd></div>
+      </dl>
+    </section>
+
+    <section class="monitor-block">
+      <h2>分析参数</h2>
+      <dl class="record-grid">
+        <div><dt>组装器</dt><dd>spades / megahit</dd></div>
+        <div><dt>SPAdes careful</dt><dd>关闭</dd></div>
+        <div><dt>线程</dt><dd>14</dd></div>
+        <div><dt>内存</dt><dd>约 57 GiB</dd></div>
+      </dl>
+    </section>
+
+    <section class="monitor-block">
+      <h2>软件版本</h2>
+      <div class="compare-scroll">
+        <table class="compare-table">
+          <tbody>
+            <tr><th scope="row">fastp</th><td>0.23.4</td></tr>
+            <tr><th scope="row">SPAdes</th><td>3.15.5</td></tr>
+            <tr><th scope="row">MEGAHIT</th><td>1.2.9</td></tr>
+            <tr><th scope="row">QUAST</th><td>5.2.0</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="monitor-block">
+      <h2>质量控制指标</h2>
+      <div class="compare-scroll">
+        <table class="compare-table">
+          <tbody>
+            <tr><th scope="row">过滤前 reads</th><td>3,102,440</td></tr>
+            <tr><th scope="row">过滤后 reads</th><td>2,954,118</td></tr>
+            <tr><th scope="row">过滤后 Q30</th><td>95.1%</td></tr>
+          </tbody>
+          <caption>只摘录 fastp JSON 里实际写出的字段。</caption>
+        </table>
+      </div>
+    </section>
+
+    <section class="monitor-block" aria-labelledby="comparison-title">
+      <div class="monitor-section-head">
+        <h2 id="comparison-title">组装器比较</h2>
+        <p>只列出这次选择的组装方法。</p>
+      </div>
+      <div class="compare-scroll">
+        <table class="compare-table metric-sheet">
+          <thead>
+            <tr><th scope="col">指标</th><th scope="col">SPAdes</th><th scope="col">MEGAHIT</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row"># contigs</th><td>74</td><td>102</td></tr>
+            <tr><th scope="row">Largest contig</th><td>428,110</td><td>296,540</td></tr>
+            <tr><th scope="row">N50</th><td>112,450</td><td>88,640</td></tr>
+            <tr><th scope="row">Total length</th><td>4,901,280</td><td>4,887,910</td></tr>
+            <tr><th scope="row">GC (%)</th><td>50.68</td><td>50.71</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="monitor-block">
+      <h2>异常提示</h2>
+      <p class="report-note">本次运行未记录异常提示。</p>
+    </section>
+  </main>
+</body>
+</html>

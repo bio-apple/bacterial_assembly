@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#eff4f2">
+  <title>模块目录 · 微生物 NGS 数据分析系统</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@500;600;700&display=swap">
+  <link rel="stylesheet" href="assets/style.css">
+  <link rel="stylesheet" href="assets/demo.css">
+</head>
+<body class="workbench">
+  <div class="demo-banner" role="note">
+    <span><strong>静态预览</strong> · 模块目录界面</span>
+    <span><a href="index.html">项目页</a> · <a href="overview.html">总览</a></span>
+  </div>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <header class="topbar">
+    <a class="brand" href="overview.html" aria-label="微生物 NGS 数据分析系统首页">
+      <span class="brand-icon" aria-hidden="true">MN<i></i></span>
+      <span>MICROBIAL <b>NGS</b></span>
+    </a>
+    <nav class="site-nav" aria-label="主要导航">
+      <a class="site-nav-link" href="overview.html">
+        <span class="nav-full">总览</span><span class="nav-short">总览</span>
+      </a>
+      <a class="site-nav-link is-active" href="modules.html" aria-current="page">
+        <span class="nav-full">分析模块</span><span class="nav-short">模块</span>
+      </a>
+      <a class="site-nav-link" href="history.html">
+        <span class="nav-full">处理历史</span><span class="nav-short">历史</span>
+      </a>
+    </nav>
+    <div class="topbar-right">
+      <span class="system-state"><i></i> Linux 工作节点</span>
+      <span class="user-tag">demo</span>
+      <a class="text-button" href="login.html">退出</a>
+    </div>
+  </header>
+  <main id="main-content" class="dashboard module-portal">
+    <section class="module-portal-intro" aria-labelledby="portal-title">
+      <div class="portal-copy">
+        <p class="eyebrow">MICROBIAL NGS / DATA ANALYSIS</p>
+        <h1 id="portal-title">微生物 NGS<br><span>数据分析系统</span></h1>
+        <p>模块目录只列出管理员已启用的分析模块，并按分析类别分组。从仪器卡片进入对应工作台。</p>
+      </div>
+      <div class="portal-signal-board" role="img" aria-label="双端测序数据进入分析模块">
+        <span class="signal-caption">PAIRED-END INPUT</span>
+        <div class="signal-reads">
+          <span>R1</span><i></i><b></b>
+          <span>R2</span><i></i><b></b>
+        </div>
+        <div class="signal-trunk" aria-hidden="true"></div>
+        <span class="signal-hub">NGS</span>
+        <div class="signal-outputs">
+          <span>1 MODULE</span>
+        </div>
+        <span class="signal-foot">READS <i>→</i> MODULES</span>
+      </div>
+    </section>
+
+    <section class="module-directory" aria-labelledby="directory-title">
+      <div class="module-directory-heading">
+        <div>
+          <p class="eyebrow">MODULE DIRECTORY</p>
+          <h2 id="directory-title">模块目录</h2>
+        </div>
+        <span class="module-count"><b>1</b> 已启用</span>
+      </div>
+      <section class="category-bench" aria-labelledby="category-genome-analysis">
+        <div class="category-rail">
+          <p class="eyebrow">CATEGORY</p>
+          <h3 id="category-genome-analysis">基因组分析</h3>
+          <span class="category-count">1 个模块</span>
+        </div>
+        <div class="instrument-stack">
+          <a class="instrument-card" href="dashboard.html">
+            <div class="instrument-head">
+              <span class="instrument-code">BA</span>
+              <div class="instrument-title">
+                <span class="instrument-id">bacterial-assembly</span>
+                <h3>细菌基因组组装</h3>
+                <p>Illumina 双端 reads 质控、组装与 QUAST 评估。</p>
+              </div>
+              <div class="instrument-flags">
+                <span class="instrument-version">模块版本 1.0</span>
+                <span class="instrument-enabled">已启用</span>
+              </div>
+            </div>
+            <p class="instrument-purpose">对一对 Illumina 双端 FASTQ 做质量过滤和短读长组装，并用 QUAST 评估每份组装结果。</p>
+            <dl class="instrument-spec">
+              <div>
+                <dt>输入</dt>
+                <dd>Illumina 双端 FASTQ</dd>
+              </div>
+              <div>
+                <dt>软件</dt>
+                <dd>fastp · SPAdes · Unicycler · Shovill/SKESA · MEGAHIT · QUAST</dd>
+              </div>
+              <div>
+                <dt>最近一次运行</dt>
+                <dd>2026-11-25 14:22</dd>
+              </div>
+              <div>
+                <dt>本账号</dt>
+                <dd class="instrument-state is-busy">分析中 1</dd>
+              </div>
+            </dl>
+            <div class="instrument-action">
+              <span>进入工作台</span><b aria-hidden="true">→</b>
+            </div>
+          </a>
+        </div>
+      </section>
+      <p class="module-directory-note">管理员未启用的模块不会出现在目录中。运行状态只统计当前账号的任务。</p>
+    </section>
+    <footer class="page-footer"><span>MICROBIAL NGS</span><span>MODULE DIRECTORY</span><span>RESULTS ARE USER-SCOPED</span></footer>
+  </main>
+</body>
+</html>

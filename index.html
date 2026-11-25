@@ -261,6 +261,26 @@
           max-width: none;
         }
       }
+
+      .site-map {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.65rem 1.25rem;
+        padding: 1.25rem clamp(1.5rem, 4vw, 3rem) 2rem;
+        background: #041210;
+        border-top: 1px solid rgba(46, 196, 182, 0.2);
+        font-family: "IBM Plex Mono", ui-monospace, monospace;
+        font-size: 0.8rem;
+      }
+
+      .site-map a {
+        color: rgba(230, 242, 240, 0.72);
+        text-decoration: none;
+      }
+
+      .site-map a:hover {
+        color: var(--accent);
+      }
     </style>
   </head>
   <body>
@@ -277,12 +297,20 @@
           双端 FASTQ → fastp → 多种组装方法 → QUAST。Web 与 Worker 跑在宿主机，生信工具跑在 Docker 侧车。
         </p>
         <div class="cta">
-          <a class="primary" href="https://github.com/bio-apple/bacterial_assembly">查看仓库</a>
-          <a class="ghost" href="https://github.com/bio-apple/bacterial_assembly/blob/main/docs/host_deployment.md"
-            >部署说明</a
-          >
+          <a class="primary" href="login.html">打开界面预览</a>
+          <a class="ghost" href="https://github.com/bio-apple/bacterial_assembly">查看仓库</a>
         </div>
       </div>
     </main>
+    <nav class="site-map" aria-label="功能页">
+      <a href="overview.html">总览</a>
+      <a href="modules.html">分析模块</a>
+      <a href="dashboard.html">组装工作台</a>
+      <a href="history.html">处理历史</a>
+      <a href="job.html">任务监控</a>
+      <a href="compare.html">运行比较</a>
+      <a href="report.html">分析报告</a>
+      <a href="https://github.com/bio-apple/bacterial_assembly/blob/main/docs/host_deployment.md">部署说明</a>
+    </nav>
   </body>
 </html>

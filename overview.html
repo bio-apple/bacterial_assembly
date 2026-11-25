@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#eff4f2">
+  <title>总览 · 微生物 NGS 数据分析系统</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@500;600;700&display=swap">
+  <link rel="stylesheet" href="assets/style.css">
+  <link rel="stylesheet" href="assets/demo.css">
+</head>
+<body class="workbench">
+  <div class="demo-banner" role="note">
+    <span><strong>静态预览</strong> · 示例数据，无实时主机监控</span>
+    <span><a href="index.html">项目页</a> · <a href="login.html">登录页</a></span>
+  </div>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <header class="topbar">
+    <a class="brand" href="overview.html" aria-label="微生物 NGS 数据分析系统首页">
+      <span class="brand-icon" aria-hidden="true">MN<i></i></span>
+      <span>MICROBIAL <b>NGS</b></span>
+    </a>
+    <nav class="site-nav" aria-label="主要导航">
+      <a class="site-nav-link is-active" href="overview.html" aria-current="page">
+        <span class="nav-full">总览</span><span class="nav-short">总览</span>
+      </a>
+      <a class="site-nav-link" href="modules.html">
+        <span class="nav-full">分析模块</span><span class="nav-short">模块</span>
+      </a>
+      <a class="site-nav-link" href="history.html">
+        <span class="nav-full">处理历史</span><span class="nav-short">历史</span>
+      </a>
+    </nav>
+    <div class="topbar-right">
+      <span class="system-state"><i></i> Linux 工作节点</span>
+      <span class="user-tag">demo</span>
+      <a class="text-button" href="login.html">退出</a>
+    </div>
+  </header>
+  <main id="main-content" class="dashboard overview-page">
+    <section class="overview-intro" aria-labelledby="overview-title">
+      <div>
+        <p class="eyebrow">WORKBENCH / THIS HOST</p>
+        <h1 id="overview-title">先看这台机器，<br>再开始下一次分析。</h1>
+        <p>任务数字只统计当前账号。CPU、内存和数据盘来自本机监控。</p>
+      </div>
+    </section>
+
+    <section class="host-instrument" aria-label="服务器资源">
+      <article class="host-meter host-meter-cpu" data-meter="cpu">
+        <span>CPU</span>
+        <strong>34%</strong>
+        <div class="host-track" aria-hidden="true"><i style="--fill: 34%"></i></div>
+        <small>16 个逻辑 CPU</small>
+      </article>
+      <article class="host-meter host-meter-memory" data-meter="memory">
+        <span>内存</span>
+        <strong>58%</strong>
+        <div class="host-track" aria-hidden="true"><i style="--fill: 58%"></i></div>
+        <small>37.2 / 64.0 GiB</small>
+      </article>
+      <article class="host-meter host-meter-disk" data-meter="disk">
+        <span>数据盘</span>
+        <strong>41%</strong>
+        <div class="host-track" aria-hidden="true"><i style="--fill: 41%"></i></div>
+        <small>820 / 2000 GiB · /data</small>
+      </article>
+    </section>
+
+    <section class="census" aria-label="任务数量">
+      <div class="census-lead">
+        <span>当前任务</span>
+        <strong>1</strong>
+        <small>排队 0 · 分析中 1</small>
+      </div>
+      <div class="census-item census-done">
+        <span>已完成</span>
+        <strong>12</strong>
+      </div>
+      <div class="census-item">
+        <span>部分完成</span>
+        <strong>1</strong>
+      </div>
+      <div class="census-item">
+        <span>失败</span>
+        <strong>2</strong>
+      </div>
+      <div class="census-item">
+        <span>全部记录</span>
+        <strong>16</strong>
+      </div>
+    </section>
+
+    <div class="overview-columns">
+      <section class="overview-panel" aria-labelledby="recent-title">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">RECENT RUNS</p>
+            <h2 id="recent-title">最近分析</h2>
+          </div>
+          <a class="overview-more" href="history.html">处理历史 →</a>
+        </div>
+        <ul class="overview-runs">
+          <li>
+            <a class="overview-run-link" href="job.html">
+              <strong>isolate_01</strong>
+              <span>BA · 细菌基因组组装</span>
+            </a>
+            <span class="status-pill status-running">分析中</span>
+          </li>
+          <li>
+            <a class="overview-run-link" href="job.html">
+              <strong>isolate_07</strong>
+              <span>BA · 细菌基因组组装</span>
+            </a>
+            <span class="status-pill status-succeeded">已完成</span>
+          </li>
+          <li>
+            <a class="overview-run-link" href="job.html">
+              <strong>Ecoli_K12</strong>
+              <span>BA · 细菌基因组组装</span>
+            </a>
+            <span class="status-pill status-partial_success">部分完成</span>
+          </li>
+        </ul>
+      </section>
+
+      <section class="overview-panel" aria-labelledby="report-title">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">OUTPUT</p>
+            <h2 id="report-title">最近报告</h2>
+          </div>
+        </div>
+        <ul class="overview-reports">
+          <li>
+            <div>
+              <strong>isolate_07</strong>
+              <span>细菌基因组组装</span>
+            </div>
+            <a href="report.html">查看报告 ↓</a>
+          </li>
+          <li>
+            <div>
+              <strong>Ecoli_K12</strong>
+              <span>细菌基因组组装</span>
+            </div>
+            <a href="report.html">下载部分结果 ↓</a>
+          </li>
+        </ul>
+      </section>
+    </div>
+
+    <section class="overview-access" aria-labelledby="access-title">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">START HERE</p>
+          <h2 id="access-title">快捷入口</h2>
+        </div>
+        <a class="overview-more" href="modules.html">全部模块 →</a>
+      </div>
+      <div class="access-grid">
+        <a class="access-card" href="dashboard.html">
+          <span class="module-code">BA</span>
+          <span>
+            <strong>细菌基因组组装</strong>
+            <small>Illumina 双端 reads 质控、组装与 QUAST 评估。</small>
+          </span>
+          <b aria-hidden="true">→</b>
+        </a>
+      </div>
+    </section>
+
+    <footer class="page-footer"><span>MICROBIAL NGS</span><span>HOST OVERVIEW</span><span>JOBS ARE USER-SCOPED</span></footer>
+  </main>
+</body>
+</html>

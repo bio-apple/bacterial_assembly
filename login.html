@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#eff4f2">
+  <title>登录 · 微生物 NGS 数据分析系统</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@500;600;700&display=swap">
+  <link rel="stylesheet" href="assets/style.css">
+  <link rel="stylesheet" href="assets/demo.css">
+</head>
+<body class="login-page">
+  <div class="demo-banner" role="note">
+    <span><strong>静态预览</strong> · GitHub Pages 展示界面，无后端登录</span>
+    <span>
+      <a href="index.html">项目页</a> ·
+      <a href="overview.html">进入总览 →</a>
+    </span>
+  </div>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <main id="main-content" class="login-shell">
+    <a class="brand login-brand" href="overview.html" aria-label="微生物 NGS 数据分析系统">
+      <span class="brand-icon" aria-hidden="true">MN<i></i></span>
+      <span>MICROBIAL <b>NGS</b></span>
+    </a>
+    <p class="eyebrow">MICROBIAL NGS / DATA ANALYSIS</p>
+    <h1>微生物&nbsp;NGS<br>数据分析系统</h1>
+    <p class="login-copy">用实验室账号进入工作台：先看本机负荷与任务概况，再进入模块提交双端样本。</p>
+    <form class="login-form" action="overview.html" method="get">
+      <label for="username">账号</label>
+      <input id="username" name="username" autocomplete="username" spellcheck="false" value="demo" required autofocus>
+      <label for="password">密码</label>
+      <div class="password-field">
+        <input id="password" name="password" type="password" autocomplete="current-password" value="demo" required>
+        <button id="toggle-password" class="password-toggle" type="button" aria-controls="password"
+                aria-label="显示密码" aria-pressed="false">显示</button>
+      </div>
+      <button class="button button-primary" type="submit">进入预览工作台 <span>↗</span></button>
+    </form>
+    <p class="login-foot">预览页不会校验账号；正式部署请使用宿主机 Web 服务</p>
+  </main>
+  <div class="login-aside" aria-hidden="true">
+    <div class="login-figure">
+      <p class="eyebrow">MICROBIAL NGS WORKFLOWS</p>
+      <div class="login-read-path">
+        <span>R1</span><i></i><b></b>
+      </div>
+      <div class="login-read-path login-read-path-alt">
+        <span>R2</span><i></i><b></b>
+      </div>
+      <div class="login-flow">
+        <span>READS</span><i></i><span>MODULE</span><i></i><span>RESULTS</span>
+      </div>
+      <p>Paired reads enter<br><strong>purpose-built analysis.</strong></p>
+    </div>
+  </div>
+  <script>
+    const toggle = document.getElementById("toggle-password");
+    const field = document.getElementById("password");
+    toggle?.addEventListener("click", () => {
+      const show = field.type === "password";
+      field.type = show ? "text" : "password";
+      toggle.setAttribute("aria-pressed", String(show));
+      toggle.setAttribute("aria-label", show ? "隐藏密码" : "显示密码");
+      toggle.textContent = show ? "隐藏" : "显示";
+    });
+  </script>
+</body>
+</html>

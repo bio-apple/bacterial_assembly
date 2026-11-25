@@ -1,0 +1,31 @@
+.demo-banner {
+  position: sticky;
+  top: 0;
+  z-index: 200;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.55rem max(1.25rem, env(safe-area-inset-right)) 0.55rem max(1.25rem, env(safe-area-inset-left));
+  background: #16383d;
+  color: #eff4f2;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+.demo-banner a {
+  color: #c8f560;
+  font-weight: 600;
+  text-decoration: none;
+}
+.demo-banner a:hover {
+  text-decoration: underline;
+}
+.demo-banner strong {
+  font-weight: 600;
+  color: #9fe8df;
+}
+body.login-page .demo-banner {
+  position: relative;
+}
