@@ -1,0 +1,39 @@
+<section class="monitor-block" id="qc-summary" aria-labelledby="qc-title">
+  <div class="monitor-section-head">
+    <h2 id="qc-title">质量控制</h2>
+    {% if fastp_html %}
+    <a id="fastp-html" href="{{ url_for('fastp_html', job_id=job_id) }}" target="_blank" rel="noopener">在新窗口打开 HTML 报告</a>
+    {% else %}
+    <a id="fastp-html" href="{{ url_for('fastp_html', job_id=job_id) }}" target="_blank" rel="noopener" hidden>在新窗口打开 HTML 报告</a>
+    {% endif %}
+  </div>
+  {% if qc.ready %}
+  <div class="qc-sheet" id="qc-sheet">
+    <p class="qc-axis"><span>过滤前</span><span>过滤后</span></p>
+    {% for row in qc.rows %}
+    <div class="qc-row">
+      <p class="qc-label">{{ row.label }}</p>
+      <div class="qc-side">
+        {% if row.before.text %}
+        <strong>{{ row.before.text }}</strong>
+        {% if row.before.raw %}<span class="checksum">记录值 {{ row.before.raw }}</span>{% endif %}
+        {% if row.before_width is not none %}<span class="qc-track"><span class="qc-fill" style="width: {{ row.before_width }}%"></span></span>{% endif %}
+        {% else %}
+        <strong class="qc-missing">未记录</strong>
+        {% endif %}
+      </div>
+      <div class="qc-side">
+        {% if row.after.text %}
+        <strong>{{ row.after.text }}</strong>
+        {% if row.after.raw %}<span class="checksum">记录值 {{ row.after.raw }}</span>{% endif %}
+        {% if row.after_width is not none %}<span class="qc-track"><span class="qc-fill is-after" style="width: {{ row.after_width }}%"></span></span>{% endif %}
+        {% else %}
+        <strong class="qc-missing">未记录</strong>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if qc.note %}<p class="report-note" id="qc-note">{{ qc.note }}</p>{% endif %}
+</section>

@@ -41,6 +41,7 @@ from scripts.stage_record import build_progress, load_stage_record
 from web.reports import (
     assemble_report_model,
     comparison_view,
+    qc_sheet,
     report_tsv,
     resource_lines,
     result_sources_present,
@@ -63,6 +64,7 @@ from web.fastq_check import FastqCheckUnavailable, FastqRecordError, check_fastq
 from web.host_monitor import format_bytes, snapshot
 from web.modules import ANALYSIS_MODULES, BACTERIAL_ASSEMBLY_MODULE_ID, group_enabled_modules
 from web.notices import note_disk, note_job
+from web.steps import step_rows, sync_job_steps
 
 ASSEMBLERS = ("spades", "unicycler", "shovill", "megahit")
 JOB_STATUSES = ("queued", "running", "cancelling", "cancelled", "succeeded", "failed")
@@ -74,6 +76,7 @@ JOB_STATUS_LABELS = {
     "cancelled": "已取消",
     "succeeded": "已完成",
     "failed": "失败",
+    "skipped": "未执行",
 }
 RESULT_FILENAMES = {"comparison.tsv"}
 RESULT_SUFFIXES = (".fasta", ".fa", ".fna", ".fas")
@@ -125,6 +128,20 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 CREATE INDEX IF NOT EXISTS jobs_owner_sequence ON jobs(owner, sequence DESC);
 CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(status, sequence);
+CREATE TABLE IF NOT EXISTS job_steps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL,
+    step_name TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+        status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled', 'skipped')
+    ),
+    started_at TEXT,
+    completed_at TEXT,
+    exit_code INTEGER,
+    error TEXT,
+    UNIQUE(job_id, step_name)
+);
+CREATE INDEX IF NOT EXISTS job_steps_job ON job_steps(job_id, id);
 CREATE TABLE IF NOT EXISTS uploads (
     id TEXT PRIMARY KEY,
     owner TEXT NOT NULL,
@@ -464,6 +481,17 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_rerun_column(db)
         ensure_sample_columns(db)
         ensure_lifecycle_columns(db)
+        db.executescript(
+            "CREATE TABLE IF NOT EXISTS job_steps ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "job_id TEXT NOT NULL, "
+            "step_name TEXT NOT NULL, "
+            "status TEXT NOT NULL CHECK (status IN "
+            "('queued', 'running', 'succeeded', 'failed', 'cancelled', 'skipped')), "
+            "started_at TEXT, completed_at TEXT, exit_code INTEGER, error TEXT, "
+            "UNIQUE(job_id, step_name));"
+            "CREATE INDEX IF NOT EXISTS job_steps_job ON job_steps(job_id, id);"
+        )
         db.commit()
     finally:
         db.close()
@@ -476,11 +504,17 @@ def create_app(test_config: dict | None = None) -> Flask:
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["Strict-Transport-Security"] = "max-age=31536000"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; style-src 'self'; script-src 'self'; "
-            "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; "
-            "base-uri 'self'; form-action 'self'; object-src 'none'"
-        )
+        if response.headers.pop("X-Fastp-Report", None) == "1":
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+                "img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+            )
+        else:
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; style-src 'self'; script-src 'self'; "
+                "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; "
+                "base-uri 'self'; form-action 'self'; object-src 'none'"
+            )
         response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -632,6 +666,9 @@ def create_app(test_config: dict | None = None) -> Flask:
             },
             "resources": resources,
             "comparison": comparison_view(assemblers, parsed),
+            "steps": recorded_steps(row),
+            "qc": qc_sheet(load_fastp_documents(directories)),
+            "fastp_html": fastp_html_file(directories) is not None,
             "report_ready": result_sources_present(
                 first_pipeline_text(directories, "versions.txt", 1024 * 1024),
                 load_fastp_documents(directories),
@@ -1533,6 +1570,18 @@ def create_app(test_config: dict | None = None) -> Flask:
         job["detail"] = job_detail(row)
         return jsonify(job=job)
 
+    @app.get("/jobs/<job_id>/fastp.html")
+    @login_required
+    def fastp_html(job_id):
+        row = owned_job(job_id)
+        path = fastp_html_file(pipeline_directories(row["output_dir"]))
+        if path is None:
+            abort(404)
+        response = send_file(path, mimetype="text/html; charset=utf-8", as_attachment=False)
+        response.headers["X-Fastp-Report"] = "1"
+        response.headers["Content-Disposition"] = "inline"
+        return response
+
     @app.get("/jobs/<job_id>/report")
     @login_required
     def job_report(job_id):
@@ -1546,6 +1595,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             csrf_token=csrf_token(),
             job=serialize_job(row),
             report=report,
+            fastp_html=fastp_html_file(pipeline_directories(row["output_dir"])) is not None,
         )
 
     @app.get("/api/jobs/<job_id>/reports/<kind>")
@@ -1557,7 +1607,12 @@ def create_app(test_config: dict | None = None) -> Flask:
         report = job_report_model(row)
         if report is None:
             abort(404, description="这份任务还没有可导出的结果。")
-        html = render_template("report_document.html", report=report)
+        html = render_template(
+            "report_document.html",
+            report=report,
+            job=serialize_job(row),
+            fastp_html=fastp_html_file(pipeline_directories(row["output_dir"])) is not None,
+        )
         try:
             html_path, tsv_path = store_report_files(row["id"], html, report_tsv(report))
         except OSError as error:
@@ -2058,6 +2113,34 @@ def first_pipeline_text(directories: list[Path], relative: str, limit: int) -> s
     return None
 
 
+def fastp_html_file(directories: list[Path]) -> Path | None:
+    found = []
+    for directory in directories:
+        folder = directory / "fastp"
+        try:
+            if folder.is_symlink() or not folder.is_dir() or not is_inside(directory, folder):
+                continue
+            names = sorted(path.name for path in folder.iterdir())
+        except OSError:
+            continue
+        for name in names:
+            if not name.endswith("_fastp.html"):
+                continue
+            path = folder / name
+            try:
+                if (
+                    path.is_symlink()
+                    or not path.is_file()
+                    or not is_inside(folder, path)
+                    or path.stat().st_size < 1
+                ):
+                    continue
+            except OSError:
+                continue
+            found.append(path)
+    return found[0] if found else None
+
+
 def load_fastp_documents(directories: list[Path]) -> list[dict]:
     documents = []
     seen = set()
@@ -2308,6 +2391,36 @@ def valid_fastq_filename(filename: str) -> bool:
 def fastq_extension(filename: str) -> str:
     lowered = secure_filename(filename).lower()
     return next(suffix for suffix in FASTQ_SUFFIXES if lowered.endswith(suffix))
+
+
+def recorded_steps(row: sqlite3.Row) -> list[dict]:
+    try:
+        assemblers = json.loads(row["assemblers"])
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(assemblers, list) or any(not isinstance(item, str) for item in assemblers):
+        return []
+    try:
+        output_dir = contained_path(current_app.config["DATA_ROOT"], row["output_dir"])
+        record = load_stage_record(stage_record_path(output_dir))
+    except (OSError, RuntimeError, ValueError):
+        record = {"stages": []}
+    try:
+        db = sqlite3.connect(current_app.config["DATABASE"], timeout=30)
+        db.row_factory = sqlite3.Row
+        try:
+            sync_job_steps(db, row["id"], assemblers, record, row["status"])
+            rows = step_rows(db, row["id"], assemblers)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+    except sqlite3.Error:
+        current_app.logger.exception("Could not record job steps")
+        return []
+    return rows
 
 
 def job_progress(row: sqlite3.Row) -> dict:

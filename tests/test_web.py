@@ -1866,11 +1866,26 @@ class WebWorkbenchTests(unittest.TestCase):
                 {
                     "stages": [
                         {
+                            "id": "fastp",
+                            "state": "done",
+                            "exit_code": 0,
+                        },
+                        {
                             "id": "spades",
                             "label": "组装",
                             "state": "failed",
                             "detail": "spades exited 1",
-                        }
+                            "exit_code": 1,
+                        },
+                        {
+                            "id": "megahit",
+                            "state": "done",
+                            "exit_code": 0,
+                        },
+                        {
+                            "id": "comparison",
+                            "state": "waiting",
+                        },
                     ]
                 }
             ),
@@ -1912,10 +1927,19 @@ class WebWorkbenchTests(unittest.TestCase):
         self.assertIn("本次运行记录：每种方法 3 线程。", text)
         self.assertIn("本次运行记录：每种方法 7 GiB。", text)
         self.assertNotIn("任务记录的线程数", text)
+        self.assertIn("分析步骤", text)
+        self.assertIn("质量过滤", text)
+        self.assertIn("SPAdes · 组装", text)
+        self.assertIn("MEGAHIT · 组装", text)
+        self.assertIn("Unicycler · 组装", text)
+        self.assertIn("spades exited 1", text)
+        self.assertIn("退出码 1", text)
+        self.assertIn("未执行", text)
         self.assertIn("无记录", text)
         self.assertNotIn("99999", text)
-        self.assertLess(text.find(">SPAdes<"), text.find(">Unicycler<"))
-        self.assertLess(text.find(">Unicycler<"), text.find(">MEGAHIT<"))
+        comparison_at = text.find('id="assembly-comparison"')
+        self.assertLess(text.find(">SPAdes<", comparison_at), text.find(">Unicycler<", comparison_at))
+        self.assertLess(text.find(">Unicycler<", comparison_at), text.find(">MEGAHIT<", comparison_at))
         self.assertIn('style="width: 40%"', text)
         self.assertEqual(text.count("推荐"), 1)
         self.assertIn("不要仅根据 N50 自动推荐最佳组装结果。", text)
@@ -1929,6 +1953,28 @@ class WebWorkbenchTests(unittest.TestCase):
         self.assertIn("过滤前总 reads", report_text)
         self.assertIn(">18<", report_text)
         self.assertIn("0.25", report_text)
+        self.assertIn("25.0%", report_text)
+        self.assertIn("width: 25%", report_text)
+        self.assertIn("在新窗口打开 HTML 报告", report_text)
+        self.assertRegex(report_text, r'id="fastp-html"[^>]*hidden')
+        (fastp_dir / "kept_sample_fastp.html").write_text("<p>fastp html report</p>", encoding="utf-8")
+        opened = self.client.get("/jobs/{}/fastp.html".format(job_id))
+        self.assertEqual(opened.status_code, 200)
+        self.assertIn(b"fastp html report", opened.data)
+        opened.close()
+        self.assertIn("inline", opened.headers["Content-Disposition"])
+        self.assertIn("script-src 'unsafe-inline'", opened.headers["Content-Security-Policy"])
+        self.assertNotIn("default-src 'self'", opened.headers["Content-Security-Policy"])
+        linked = self.client.get("/jobs/{}".format(job_id))
+        linked_text = linked.get_data(as_text=True)
+        self.assertIn('id="fastp-html"', linked_text)
+        self.assertNotRegex(linked_text, r'id="fastp-html"[^>]*hidden')
+        stolen_html = bob.get("/jobs/{}/fastp.html".format(job_id))
+        self.assertEqual(stolen_html.status_code, 404)
+        html_path = fastp_dir / "kept_sample_fastp.html"
+        html_path.unlink()
+        html_path.symlink_to(self.root / "fastq_check.py")
+        self.assertEqual(self.client.get("/jobs/{}/fastp.html".format(job_id)).status_code, 404)
         self.assertNotIn("过滤前 Q30 比例", report_text)
         self.assertNotIn("质量控制指标未记录", report_text)
         self.assertIn("pipeline exploded", report_text)

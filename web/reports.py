@@ -25,6 +25,13 @@ CHART_METRICS = (
     ("# contigs", "Contig 数量"),
     ("Total length", "基因组长度"),
 )
+QC_PAIRS = (
+    ("total_reads", "reads", "count"),
+    ("total_bases", "碱基数", "count"),
+    ("q20_rate", "Q20", "rate"),
+    ("q30_rate", "Q30", "rate"),
+    ("gc_content", "GC", "rate"),
+)
 FASTP_FIELDS = (
     ("summary.before_filtering.total_reads", "过滤前总 reads"),
     ("summary.before_filtering.total_bases", "过滤前总碱基数"),
@@ -244,6 +251,84 @@ def format_recorded_number(value: int | float) -> str:
     return str(value)
 
 
+def _side_number(payload: dict, stage: str, key: str) -> float | None:
+    number = parse_metric_number(_dig(payload, "summary.{}.{}".format(stage, key)))
+    raw = _dig(payload, "summary.{}.{}".format(stage, key))
+    if number is None or isinstance(raw, bool):
+        return None
+    return number
+
+
+def _rate_text(number: float) -> tuple[str, str] | None:
+    if number < 0 or number > 1:
+        return None
+    return "{:.1f}%".format(number * 100), format_recorded_number(number)
+
+
+def _bar_widths(kind: str, before: float | None, after: float | None) -> tuple[int | None, int | None]:
+    if kind == "rate":
+        before_width = round(before * 100) if before is not None and 0 <= before <= 1 else None
+        after_width = round(after * 100) if after is not None and 0 <= after <= 1 else None
+        return before_width, after_width
+    if before is None or after is None or before < 0 or after < 0:
+        return None, None
+    scale = max(before, after)
+    if scale <= 0:
+        return 0, 0
+    return round(before / scale * 100), round(after / scale * 100)
+
+
+def _qc_side(kind: str, number: float | None) -> dict:
+    if number is None:
+        return {"text": None, "raw": None}
+    if kind == "rate":
+        shown = _rate_text(number)
+        if shown is not None:
+            text, raw = shown
+            return {"text": text, "raw": raw}
+    return {"text": format_recorded_number(number), "raw": None}
+
+
+def qc_sheet(documents: list[dict]) -> dict:
+    rows = []
+    unreadable = []
+    readable = []
+    for document in documents:
+        if document.get("unreadable") or not isinstance(document.get("payload"), dict):
+            if document.get("present"):
+                unreadable.append(document.get("name") or "fastp.json")
+            continue
+        readable.append(document)
+    for document in readable:
+        prefix = "{} · ".format(document.get("name") or "fastp.json") if len(readable) > 1 else ""
+        payload = document["payload"]
+        for key, label, kind in QC_PAIRS:
+            before = _side_number(payload, "before_filtering", key)
+            after = _side_number(payload, "after_filtering", key)
+            if before is None and after is None:
+                continue
+            before_width, after_width = _bar_widths(kind, before, after)
+            rows.append(
+                {
+                    "label": prefix + label,
+                    "kind": kind,
+                    "before": _qc_side(kind, before),
+                    "after": _qc_side(kind, after),
+                    "before_width": before_width,
+                    "after_width": after_width,
+                }
+            )
+    if rows and unreadable:
+        note = "另有 fastp 报告无法读取：{}。".format("、".join(unreadable))
+    elif rows:
+        note = "数量的条只比较这一行的过滤前和过滤后。Q20、Q30、GC 的条按记录比例画出。都不表示哪一边更好。"
+    elif unreadable:
+        note = "质量控制指标未记录。"
+    else:
+        note = "质量控制指标未记录。"
+    return {"ready": bool(rows), "rows": rows, "note": note}
+
+
 def qc_metrics(documents: list[dict]) -> dict:
     metrics = []
     unreadable = []
@@ -394,6 +479,7 @@ def assemble_report_model(
         "versions_note": "" if versions else "软件版本未记录。",
         "qc": qc["metrics"],
         "qc_note": qc["note"],
+        "qc_sheet": qc_sheet(fastp_documents),
         "comparison": comparison,
         "anomalies": anomalies,
         "anomaly_note": "" if anomalies else "没有记录到异常。",

@@ -188,6 +188,12 @@ def _record_method_error(
     print("{}{}".format(log_prefix, message), file=sys.stderr)
 
 
+def recorded_exit_code(error: BaseException) -> int | None:
+    if isinstance(error, subprocess.CalledProcessError) and isinstance(error.returncode, int):
+        return error.returncode
+    return None
+
+
 def run_assembler(
     assembler: str,
     outdir: Path,
@@ -253,9 +259,11 @@ def run_assembler(
             log_lock,
             log_prefix,
         )
-        stages.finish(assembler)
+        stages.finish(assembler, exit_code=0)
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
-        stages.finish(assembler, "failed", detail=str(error))
+        stages.finish(
+            assembler, "failed", detail=str(error), exit_code=recorded_exit_code(error)
+        )
         _record_method_error(error, method_log, root_log, log_lock, log_prefix)
         return assembler, False
 
@@ -286,7 +294,7 @@ def run_assembler(
                 with log_lock:
                     append_log(root_log, "{}{}\n".format(log_prefix, message))
                 stages.start(stage_id)
-                stages.finish(stage_id, "done", detail="没有达到阈值的 contig")
+                stages.finish(stage_id, "done", detail="没有达到阈值的 contig", exit_code=0)
                 continue
             stages.start(stage_id, detail=evaluation_label)
             run_script(
@@ -304,9 +312,11 @@ def run_assembler(
                 stream_lock=log_lock,
                 log_prefix=log_prefix,
             )
-            stages.finish(stage_id)
+            stages.finish(stage_id, exit_code=0)
         except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
-            stages.finish(stage_id, "failed", detail=str(error))
+            stages.finish(
+                stage_id, "failed", detail=str(error), exit_code=recorded_exit_code(error)
+            )
             _record_method_error(error, method_log, root_log, log_lock, log_prefix)
             return assembler, False
     with log_lock:
@@ -402,7 +412,7 @@ def main() -> int:
             versions_path,
             thread_count=cpu_count,
         )
-        stages.finish("fastp")
+        stages.finish("fastp", exit_code=0)
 
         log_dir = outdir / "logs"
         log_lock = threading.Lock()
@@ -432,12 +442,13 @@ def main() -> int:
         if successful:
             stages.start("comparison")
             run_summary(outdir, successful, log_path)
-            stages.finish("comparison")
+            stages.finish("comparison", exit_code=0)
         else:
             stages.finish(
                 "comparison",
                 "done",
                 detail="没有成功的组装方法，未写比较汇总",
+                exit_code=0,
             )
         if failed:
             return report_script_error(

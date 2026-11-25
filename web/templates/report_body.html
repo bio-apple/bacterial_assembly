@@ -41,6 +41,10 @@
   {% if report.versions_note %}<p class="report-note">{{ report.versions_note }}</p>{% endif %}
 </section>
 
+{% with qc=report.qc_sheet, fastp_html=fastp_html, job_id=job.id %}
+{% include "qc_summary.html" %}
+{% endwith %}
+
 <section class="monitor-block">
   <h2>质量控制指标</h2>
   {% if report.qc %}

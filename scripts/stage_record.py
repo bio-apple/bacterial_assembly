@@ -268,9 +268,17 @@ class StageRecord:
             stage["updated_at"] = utc_now()
             self._write()
 
-    def finish(self, stage_id: str, state: str = "done", detail: str | None = None) -> None:
+    def finish(
+        self,
+        stage_id: str,
+        state: str = "done",
+        detail: str | None = None,
+        exit_code: int | None = None,
+    ) -> None:
         if state not in ("done", "failed"):
             raise ValueError("stage finish state must be done or failed")
+        if isinstance(exit_code, bool) or (exit_code is not None and not isinstance(exit_code, int)):
+            raise ValueError("exit_code must be an integer")
         with self._lock:
             stage = self._find(stage_id)
             now = utc_now()
@@ -280,6 +288,8 @@ class StageRecord:
             stage["updated_at"] = now
             if detail is not None:
                 stage["detail"] = detail[:500]
+            if exit_code is not None:
+                stage["exit_code"] = exit_code
             self._write()
 
     def fail_running(self, detail: str | None = None) -> None:

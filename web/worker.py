@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from scripts.stage_record import load_stage_record
+from web.steps import sync_job_steps
 from web.app import append_job_log, contained_path, create_app
 from web.errors import WORKER_INTERRUPTED, explain_job_failure
 from web.notices import note_disk, note_job, volume_is_low
@@ -484,6 +485,8 @@ def recover_interrupted_jobs(database: Path) -> None:
                         "STATUS: failed\nRECONCILE: worker stopped before the database reached a terminal status",
                     )
     reconcile_terminal_logs(database)
+    for row in rows:
+        persist_job_steps(database, row["id"])
 
 
 def reconcile_terminal_logs(database: Path) -> None:
@@ -498,6 +501,42 @@ def reconcile_terminal_logs(database: Path) -> None:
             row["log_path"],
             "STATUS: {}\nRECONCILE: kept database status".format(row["status"]),
         )
+
+
+def persist_job_steps(database: Path, job_id: str) -> None:
+    try:
+        _persist_job_steps(database, job_id)
+    except (OSError, sqlite3.Error, ValueError) as error:
+        print("Could not record steps for {}: {}".format(job_id, error), file=sys.stderr)
+
+
+def _persist_job_steps(database: Path, job_id: str) -> None:
+    with connect(database) as db:
+        row = db.execute(
+            "SELECT assemblers, status, output_dir FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+    if row is None:
+        return
+    try:
+        assemblers = json.loads(row["assemblers"])
+    except (TypeError, json.JSONDecodeError):
+        return
+    if not isinstance(assemblers, list):
+        return
+    output = Path(row["output_dir"])
+    record = {"stages": []}
+    for candidate in (
+        output.parent / "work" / "stages.json",
+        output / "stages.json",
+        output / "outputs" / "stages.json",
+    ):
+        loaded = load_stage_record(candidate)
+        if loaded.get("stages"):
+            record = loaded
+            break
+    with connect(database) as db:
+        sync_job_steps(db, job_id, assemblers, record, row["status"])
 
 
 def claim_next_job(database: Path):
@@ -748,6 +787,7 @@ def process_next_job(app) -> bool:
             finalize_cancelled(
                 app.config["DATABASE"], job["id"], log_path, pipeline_output_dir
             )
+            persist_job_steps(app.config["DATABASE"], job["id"])
             return True
 
         partial_output_available = (
@@ -800,6 +840,7 @@ def process_next_job(app) -> bool:
             finalize_cancelled(
                 app.config["DATABASE"], job["id"], log_path, pipeline_output_dir
             )
+            persist_job_steps(app.config["DATABASE"], job["id"])
             return True
         try:
             if log_path is not None:
@@ -820,6 +861,7 @@ def process_next_job(app) -> bool:
             worker_pid=None,
             error=failure_message(returncode, error, log_path, pipeline_output_dir, False),
         )
+    persist_job_steps(app.config["DATABASE"], job["id"])
     return True
 
 

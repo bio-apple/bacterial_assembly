@@ -4,7 +4,8 @@
   "cancelling": "取消中",
   "cancelled": "已取消",
   "succeeded": "已完成",
-  "failed": "失败"
+  "failed": "失败",
+  "skipped": "未执行"
 } %}
 {% macro status_pill(status, element_id="") -%}
 <span class="status-pill status-{{ status }}"{% if element_id %} id="{{ element_id }}"{% endif %}>{{ JOB_STATUS_LABELS.get(status, status) }}</span>

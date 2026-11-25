@@ -989,6 +989,39 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .report-absent { flex-basis: 100%; color: var(--faint); font: 11px var(--sans); font-weight: 500; }
 .metric-sheet td, .metric-sheet thead th:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
 .metric-sheet tbody th, .metric-sheet thead th:first-child { text-align: left; }
+#fastp-html[hidden] { display: none; }
+#fastp-html {
+  color: var(--teal);
+  font: 600 12px var(--sans);
+  text-decoration: none;
+}
+#fastp-html:hover { color: var(--coral); }
+#step-ledger-body[hidden], #step-ledger-empty[hidden], #step-ledger-table[hidden] { display: none; }
+.step-sheet th { text-align: left; font-weight: 650; }
+.step-sheet td { width: 6.5rem; text-align: right; }
+.step-sheet small { display: block; margin-top: 4px; color: var(--coral); font-size: 12px; font-weight: 500; }
+.qc-axis, .qc-row {
+  display: grid;
+  grid-template-columns: 7rem minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px 22px;
+}
+.qc-axis { margin: 14px 0 0; color: var(--faint); font: 8px var(--mono); letter-spacing: .08em; }
+.qc-axis span:first-child { grid-column: 2; }
+.qc-row { align-items: end; padding: 12px 0; border-top: 1px solid var(--line); }
+.qc-label { margin: 0; color: var(--ink); font-size: 13px; font-weight: 650; }
+.qc-side { min-width: 0; }
+.qc-side strong {
+  display: block;
+  color: var(--ink);
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -.04em;
+  font-variant-numeric: tabular-nums;
+}
+.qc-side strong.qc-missing { color: var(--faint); font-size: 13px; font-weight: 500; letter-spacing: 0; }
+.qc-track { display: block; height: 6px; margin-top: 8px; background: var(--line); }
+.qc-fill { display: block; height: 100%; background: var(--deep); }
+.qc-fill.is-after { background: var(--teal); }
 .metric-charts {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1028,6 +1061,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .monitor-facts div:nth-child(odd) { padding-left: 0; }
   .monitor-section-head { align-items: flex-start; flex-direction: column; gap: 4px; }
   .metric-charts { grid-template-columns: 1fr; }
+  .qc-axis, .qc-row { grid-template-columns: 1fr; }
+  .qc-axis span:first-child { grid-column: auto; }
   .record-grid { grid-template-columns: 1fr; }
   .record-grid > div + div { padding-left: 0; border-left: 0; border-top: 1px solid var(--line); }
 }

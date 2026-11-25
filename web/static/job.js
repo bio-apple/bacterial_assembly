@@ -183,6 +183,8 @@
     bindElapsed(job);
     if (job.detail) {
       renderResources(job.detail.resources);
+      renderQc(job);
+      renderSteps(job.detail.steps);
       renderComparison(job.detail.comparison);
       renderReports(job.detail.report_ready);
       refreshHost(job.status);
@@ -203,6 +205,85 @@
     if (text !== undefined) node.textContent = text;
     parent.append(node);
     return node;
+  }
+
+  function renderQc(job) {
+    const section = document.querySelector("#qc-summary");
+    const detail = job.detail || {};
+    const qc = detail.qc;
+    if (!section || !qc) return;
+    const link = section.querySelector("#fastp-html");
+    if (link) link.hidden = !detail.fastp_html;
+    section.querySelectorAll(".qc-sheet, #qc-note").forEach((node) => node.remove());
+    if (qc.ready) {
+      const sheet = append(section, "div", "qc-sheet");
+      sheet.id = "qc-sheet";
+      const axis = append(sheet, "p", "qc-axis");
+      append(axis, "span", "", "过滤前");
+      append(axis, "span", "", "过滤后");
+      for (const row of qc.rows || []) {
+        const line = append(sheet, "div", "qc-row");
+        append(line, "p", "qc-label", row.label);
+        line.append(qcSide(row.before, row.before_width, false));
+        line.append(qcSide(row.after, row.after_width, true));
+      }
+    }
+    if (qc.note) append(section, "p", "report-note", qc.note).id = "qc-note";
+  }
+
+  function qcSide(side, width, after) {
+    const cell = document.createElement("div");
+    cell.className = "qc-side";
+    const value = document.createElement("strong");
+    if (!side || !side.text) {
+      value.className = "qc-missing";
+      value.textContent = "未记录";
+      cell.append(value);
+      return cell;
+    }
+    value.textContent = side.text;
+    cell.append(value);
+    if (side.raw) append(cell, "span", "checksum", `记录值 ${side.raw}`);
+    if (width !== null && width !== undefined) {
+      const track = append(cell, "span", "qc-track");
+      const fill = append(track, "span", after ? "qc-fill is-after" : "qc-fill");
+      fill.style.width = `${width}%`;
+    }
+    return cell;
+  }
+
+  function renderSteps(steps) {
+    const body = document.querySelector("#step-ledger-body");
+    const empty = document.querySelector("#step-ledger-empty");
+    const table = document.querySelector("#step-ledger-table");
+    if (!body || !empty || !table) return;
+    const rows = Array.isArray(steps) ? steps : [];
+    body.replaceChildren();
+    empty.hidden = rows.length > 0;
+    table.hidden = rows.length === 0;
+    body.hidden = rows.length === 0;
+    const labels = window.JOB_STATUS_LABELS || {};
+    for (const step of rows) {
+      const line = document.createElement("tr");
+      const name = document.createElement("th");
+      name.scope = "row";
+      name.textContent = step.label || step.name || "";
+      if (step.error) {
+        const reason = document.createElement("small");
+        reason.textContent = step.error;
+        name.append(reason);
+      }
+      if (step.exit_code !== null && step.exit_code !== undefined) {
+        append(name, "span", "checksum", `退出码 ${step.exit_code}`);
+      }
+      const state = document.createElement("td");
+      const pill = document.createElement("span");
+      pill.className = `status-pill status-${step.status}`;
+      pill.textContent = labels[step.status] || step.status;
+      state.append(pill);
+      line.append(name, state);
+      body.append(line);
+    }
   }
 
   function renderComparison(comparison) {
