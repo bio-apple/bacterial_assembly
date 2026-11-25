@@ -99,8 +99,59 @@ def mirror_job_archive(job_id: str, archive_path: str) -> None:
         return
 
 
+def sync_sqlite_steps_from_pg(job_id: str) -> None:
+    """Project Postgres job_steps into SQLite read model (not stages.json)."""
+    path = sqlite_database_path()
+    if path is None:
+        return
+    try:
+        db = sqlite3.connect(path, timeout=30)
+        db.row_factory = sqlite3.Row
+        try:
+            row = db.execute(
+                "SELECT assemblers FROM jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                return
+            try:
+                assemblers = json.loads(row["assemblers"])
+            except (TypeError, json.JSONDecodeError):
+                return
+            if not isinstance(assemblers, list):
+                return
+            from web.step_read_model import recorded_steps_from_pg
+
+            steps = recorded_steps_from_pg(job_id, assemblers)
+            for step in steps:
+                db.execute(
+                    "INSERT INTO job_steps (job_id, step_name, status, started_at, completed_at, exit_code, error) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(job_id, step_name) DO UPDATE SET "
+                    "status = excluded.status, "
+                    "started_at = COALESCE(excluded.started_at, job_steps.started_at), "
+                    "completed_at = excluded.completed_at, "
+                    "exit_code = COALESCE(excluded.exit_code, job_steps.exit_code), "
+                    "error = excluded.error",
+                    (
+                        job_id,
+                        step["name"],
+                        step["status"],
+                        step.get("started_at"),
+                        step.get("completed_at"),
+                        step.get("exit_code"),
+                        step.get("error"),
+                    ),
+                )
+            db.commit()
+        finally:
+            db.close()
+    except (OSError, sqlite3.Error, ValueError):
+        return
+
+
 def sync_sqlite_steps_from_disk(job_id: str) -> None:
-    """Sync SQLite job_steps from stages.json for Web recorded_steps."""
+    """Deprecated: legacy sqlite worker only. Prefer sync_sqlite_steps_from_pg."""
     path = sqlite_database_path()
     if path is None:
         return

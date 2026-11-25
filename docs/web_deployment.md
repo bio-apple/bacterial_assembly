@@ -2,34 +2,29 @@
 
 工作台定位为「微生物 NGS 数据分析系统」。用户登录后进入 `/overview`，再从 `/modules` 进入细菌基因组组装模块。
 
-完整 Compose（Postgres、Redis、双 Worker、工具侧车）见 [docker_deployment.md](docker_deployment.md)。
-
-## 前置条件
-
-Linux 服务器安装 Docker Engine、Docker Compose plugin、Nginx，并将本仓库放到服务器。
+完整宿主机安装见 [host_deployment.md](host_deployment.md)。
 
 ## 账号与密钥
 
 ```bash
-cd deploy
-cp .env.example .env
-cp users.json.example users.json
-chmod 600 .env users.json
+sudo cp deploy/assembly.env.example /etc/bacterial-assembly/assembly.env
+sudo cp deploy/users.json.example /etc/bacterial-assembly/users.json
+sudo chmod 600 /etc/bacterial-assembly/assembly.env /etc/bacterial-assembly/users.json
 ```
 
-在 `.env` 中设置 `ASSEMBLY_WEB_SECRET`、`ASSEMBLY_SESSION_COOKIE_SECURE`、`APP_UID`、`APP_GID`、`POSTGRES_PASSWORD`、`DOCKER_GID` 等。经本机 Nginx HTTPS 反代访问时保持 `ASSEMBLY_SESSION_COOKIE_SECURE=true`；若浏览器直接访问 `http://127.0.0.1:8000`，改为 `false`。生成密码哈希：
+设置 `ASSEMBLY_WEB_SECRET`、`ASSEMBLY_SESSION_COOKIE_SECURE`、`ASSEMBLY_USERS_FILE`、`ASSEMBLY_DATA_ROOT`、`DATABASE_URL`、`REDIS_URL` 等。经本机 Nginx HTTPS 反代访问时保持 `ASSEMBLY_SESSION_COOKIE_SECURE=true`；若浏览器直接访问 `http://127.0.0.1:8000`，改为 `false`。生成密码哈希：
 
 ```bash
-docker compose build
-docker compose run --rm --entrypoint micromamba web \
-  run -n base python /opt/bacterial-assembly/web/password_hash.py
+/opt/bacterial-assembly/.venv/bin/python /opt/bacterial-assembly/web/password_hash.py
 ```
 
 把账号与 scrypt 哈希填入 `users.json`。账号由管理员预配，不提供公开注册。
 
-## 启动
+## 进程与数据根
 
-见 [docker_deployment.md](docker_deployment.md)。仓库只读挂载到 `/opt/bacterial-assembly`。Web 绑定 `127.0.0.1:8000`。数据根 `deploy/data/`（容器内 `/data`）：
+- Gunicorn：`127.0.0.1:8000`，`web.app:app`
+- Worker：`python -m web.rq_worker qc` / `assembly`
+- 数据根：`ASSEMBLY_DATA_ROOT`（绝对路径），布局见 ADR 0009：
 
 ```text
 data/
@@ -45,8 +40,6 @@ data/
   temp/
   archive/
 ```
-
-分片上传在 `uploads/chunks/`；直传暂存在 `uploads/incoming/`；校验通过待绑定在 `uploads/validated/`。分析只读 `jobs/<id>/input`。
 
 ## 上传与校验
 

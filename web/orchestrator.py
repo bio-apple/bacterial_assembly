@@ -11,7 +11,7 @@ from web.job_publish import archive_results_dir, publish_work_to_output
 from web.pg import connection
 from web.queueing import enqueue_step
 from web.step_store import new_id, utc_now
-from web.sqlite_mirror import mirror_job_archive, mirror_job_status, sync_sqlite_steps_from_disk
+from web.sqlite_mirror import mirror_job_archive, mirror_job_status, sync_sqlite_steps_from_pg
 
 
 def plan_and_insert_job(
@@ -247,7 +247,7 @@ def _fail_job(job_id: str, error: str) -> None:
                 (error, utc_now(), utc_now(), job_id),
             )
     mirror_job_status(job_id, "failed", error)
-    sync_sqlite_steps_from_disk(job_id)
+    sync_sqlite_steps_from_pg(job_id)
     _publish_and_archive(job_id)
 
 
@@ -292,7 +292,7 @@ def _finalize_job(job_id: str) -> None:
                 (status, utc_now(), utc_now(), job_id),
             )
     mirror_job_status(job_id, status, None)
-    sync_sqlite_steps_from_disk(job_id)
+    sync_sqlite_steps_from_pg(job_id)
     _publish_and_archive(job_id)
 
 

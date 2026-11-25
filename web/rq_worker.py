@@ -8,6 +8,7 @@ import sys
 from rq import Worker
 
 from web.queueing import ASSEMBLY_QUEUE, QC_QUEUE, redis_connection
+from web.runtime_config import validate_worker_runtime, wire_tool_runtime_hooks
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -23,6 +24,8 @@ def main(argv: list[str] | None = None) -> int:
         help="Process queued jobs then exit",
     )
     args = parser.parse_args(argv)
+    validate_worker_runtime(check_docker=True)
+    wire_tool_runtime_hooks()
     queue_name = ASSEMBLY_QUEUE if args.role == "assembly" else QC_QUEUE
     # Import jobs module so RQ can resolve callables.
     import web.rq_jobs  # noqa: F401

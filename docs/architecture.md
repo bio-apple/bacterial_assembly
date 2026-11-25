@@ -27,8 +27,8 @@ Flask / API
 
 - API 不执行生信软件，不等待容器结束。
 - 组装 Worker 与 QC Worker 独立进程，共享同一数据根。
-- 生信软件在白名单工具镜像中运行（见 [docker_tools.md](docker_tools.md)）；应用镜像不含组装/评估二进制。
-- 自建镜像构建平台由宿主机判定，可被 `--platform` / `PLATFORM` 覆盖；支持 `linux/amd64` 与 `linux/arm64`（见 ADR 0019）。
+- Flask / Worker 在宿主机运行（ADR 0020）；生信软件仅在白名单工具镜像中运行（见 [docker_tools.md](docker_tools.md)）。
+- 工具镜像构建平台由宿主机判定，可被 `--platform` / `PLATFORM` 覆盖；支持 `linux/amd64` 与 `linux/arm64`（见 ADR 0019）。
 
 ## 分析流程
 
@@ -62,12 +62,17 @@ Flask / API
 | SQLite 镜像与步骤读模型 | `web/sqlite_mirror.py`、`web/step_read_model.py` |
 | 发布 / 归档 | `web/job_publish.py` |
 | 路径解析 | `web/job_paths.py` |
-| 工具容器 | `scripts/docker_executor.py` |
+| 工具容器 | `scripts/docker_executor.py`（CancelPoll / set_container 由运行时注入） |
+| 步骤读模型 | `web/step_read_model.py`（`postgres_rq` 读 PG） |
+| 任务入队 | `web/job_submit.submit_analysis_task` |
+| 任务取消 | `web/cancel.request_cancel` |
+| 运行时配置 | `web/runtime_config.py` |
+| SQLite schema | `web/db_sqlite.py` |
 | 组装常量 | `scripts/pipeline_core.py`、`scripts/assembly_outcome.py` |
 
 Redis 消息只带 `step_id` 等调度元数据；路径与参数以 PostgreSQL 与磁盘为准。
 
-`TASK_BACKEND=sqlite` 时由 `web/worker.py` 调用 `run_pipeline.py`（单测默认）；Compose 默认 `postgres_rq`。
+`TASK_BACKEND=sqlite` 时由 `web/worker.py` 调用 `run_pipeline.py`（单测默认）；推荐部署默认 `postgres_rq`。
 
 ## 状态
 
@@ -96,7 +101,7 @@ Redis 消息只带 `step_id` 等调度元数据；路径与参数以 PostgreSQL 
 
 ## 数据根
 
-`ASSEMBLY_DATA_ROOT`（Compose：`/data` ← `deploy/data/`）：
+`ASSEMBLY_DATA_ROOT`（宿主机绝对路径，EnvironmentFile 配置）：
 
 ```text
 uploads/{chunks,incoming,validated}/

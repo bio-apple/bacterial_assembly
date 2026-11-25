@@ -17,11 +17,10 @@ fastp、四种组装软件和 QUAST 在独立工具容器中运行。应用进�
 
 ## 构建
 
-平台由 `docker/lib/resolve-platform.sh` 解析（ADR 0019）：`--platform` > `PLATFORM` > 宿主机判定。支持：`linux/amd64`、`linux/arm64`。Compose / Dockerfile 不写死平台。
+平台由 `docker/lib/resolve-platform.sh` 解析（ADR 0019）：`--platform` > `PLATFORM` > 宿主机判定。支持：`linux/amd64`、`linux/arm64`。Dockerfile 不写死平台。
 
 ```bash
 ./docker/tools/build.sh
-./docker/build-app.sh
 # 覆盖示例：./docker/tools/build.sh --platform linux/amd64
 ```
 
@@ -29,8 +28,7 @@ fastp、四种组装软件和 QUAST 在独立工具容器中运行。应用进�
 
 | 变量 | 含义 |
 | --- | --- |
-| `TOOL_RUNTIME` | `docker` 或 `local`（未设置时为 `local`；Compose Worker 为 `docker`） |
-| `DOCKER_GID` | 访问 `/var/run/docker.sock` 的宿主机 docker 组 GID |
+| `TOOL_RUNTIME` | `docker` 或 `local`（未设置时为 `local`；推荐部署为 `docker`） |
 | `_ASSEMBLY_JOB_ID` | 容器标签 `bacterial.assembly.job_id` |
 | `_ASSEMBLY_STEP_NAME` | 容器标签 `bacterial.assembly.step` |
 | `_ASSEMBLY_STEP_ID` | 写入 Postgres `job_steps.container_id` 的步骤主键 |

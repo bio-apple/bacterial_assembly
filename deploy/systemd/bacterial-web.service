@@ -1,0 +1,28 @@
+[Unit]
+Description=Bacterial assembly Flask/Gunicorn web
+After=network-online.target postgresql.service redis-server.service redis.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bacterial
+Group=bacterial
+SupplementaryGroups=docker
+WorkingDirectory=/opt/bacterial-assembly
+EnvironmentFile=/etc/bacterial-assembly/assembly.env
+Environment=PYTHONPATH=/opt/bacterial-assembly
+Environment=PATH=/opt/bacterial-assembly/.mamba/envs/validate/bin:/opt/bacterial-assembly/.venv/bin:/usr/local/bin:/usr/bin
+ExecStart=/opt/bacterial-assembly/.venv/bin/gunicorn \
+  --workers 2 \
+  --timeout 3600 \
+  --bind 127.0.0.1:8000 \
+  --access-logfile - \
+  --error-logfile - \
+  web.app:app
+Restart=on-failure
+RestartSec=5
+# Long uploads; do not kill mid-request aggressively
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

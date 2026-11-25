@@ -1,0 +1,21 @@
+[Unit]
+Description=Bacterial assembly RQ assembly worker
+After=network-online.target postgresql.service redis-server.service redis.service docker.service bacterial-web.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+User=bacterial
+Group=bacterial
+SupplementaryGroups=docker
+WorkingDirectory=/opt/bacterial-assembly
+EnvironmentFile=/etc/bacterial-assembly/assembly.env
+Environment=PYTHONPATH=/opt/bacterial-assembly
+Environment=PATH=/opt/bacterial-assembly/.mamba/envs/validate/bin:/opt/bacterial-assembly/.venv/bin:/usr/local/bin:/usr/bin
+ExecStart=/opt/bacterial-assembly/.venv/bin/python -m web.rq_worker assembly
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

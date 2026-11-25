@@ -1,0 +1,8 @@
+# Host runtime for Flask, Gunicorn, and RQ workers (ADR 0020).
+# Pins match requirements-web.txt; prefer: pip install -r requirements-host.txt
+#
+# Also put ValidateFastq + OpenJDK on PATH via a micromamba env (not pip):
+#   micromamba create -y -n validate -c conda-forge -c bioconda \
+#     python=3.10 biopet-validatefastq=0.1.1 openjdk=8
+# See docs/host_deployment.md.
+-r requirements-web.txt

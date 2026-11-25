@@ -2,16 +2,12 @@
 
 ## 总控流水线
 
-把仓库只读挂载到 `/opt/bacterial-assembly`，把工作目录挂载为容器当前目录：
+在已安装宿主机依赖、设置 `TOOL_RUNTIME=docker` 且已构建工具镜像的环境中：
 
 ```bash
-docker run --rm \
-  --user "$(id -u):$(id -g)" \
-  --platform linux/amd64 \
-  -v /path/to/bacterial_assembly:/opt/bacterial-assembly:ro \
-  -v "$PWD:/work" -w /work \
-  bacterial-assembly:latest \
-  python3 /opt/bacterial-assembly/run_pipeline.py \
+export PYTHONPATH=/path/to/bacterial_assembly
+export TOOL_RUNTIME=docker
+python3 /path/to/bacterial_assembly/run_pipeline.py \
   --r1 reads_R1.fastq.gz \
   --r2 reads_R2.fastq.gz \
   --outdir results/isolate_01 \
@@ -25,14 +21,11 @@ docker run --rm \
 查看参数：
 
 ```bash
-docker run --rm \
-  --platform linux/amd64 \
-  -v /path/to/bacterial_assembly:/opt/bacterial-assembly:ro \
-  bacterial-assembly:latest \
-  python3 /opt/bacterial-assembly/run_pipeline.py --help
+python3 /path/to/bacterial_assembly/run_pipeline.py --help
 ```
 
 ### 主要参数
+
 
 - `--r1` / `--r2`：双端 FASTQ（`.fastq`、`.fq` 或其 gzip）
 - `--outdir`：空结果目录

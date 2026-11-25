@@ -672,30 +672,9 @@ def recorded_steps(row: sqlite3.Row) -> list[dict]:
         assemblers = json.loads(row["assemblers"])
     except (TypeError, json.JSONDecodeError):
         return []
-    if not isinstance(assemblers, list) or any(not isinstance(item, str) for item in assemblers):
-        return []
-    rows: list[dict] = []
-    try:
-        db = sqlite3.connect(current_app.config["DATABASE"], timeout=30)
-        db.row_factory = sqlite3.Row
-        try:
-            rows = step_rows(db, row["id"], assemblers)
-        finally:
-            db.close()
-    except sqlite3.Error:
-        current_app.logger.exception("Could not load job steps")
-        rows = []
-    if rows:
-        return rows
-    if use_rq_pipeline():
-        try:
-            from web.step_read_model import recorded_steps_from_pg
+    from web.step_read_model import load_recorded_steps
 
-            return recorded_steps_from_pg(row["id"], assemblers)
-        except Exception:
-            current_app.logger.exception("Could not load Postgres job steps")
-            return []
-    return rows
+    return load_recorded_steps(row["id"], assemblers)
 
 
 def job_progress(row: sqlite3.Row) -> dict:

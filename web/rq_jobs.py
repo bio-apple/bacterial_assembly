@@ -8,7 +8,7 @@ import socket
 from scripts.resource_budget import read_runtime_limits
 from web.orchestrator import on_step_finished
 from web import step_runners
-from web.sqlite_mirror import mirror_job_status, sync_sqlite_steps_from_disk
+from web.sqlite_mirror import mirror_job_status, sync_sqlite_steps_from_pg
 from web.step_store import (
     claim_step,
     finish_step,
@@ -79,17 +79,17 @@ def _run_claimed(step_id: str, expected_worker_type: str) -> str:
         if job_cancel_requested(str(claimed["job_id"])):
             finish_step(step_id, status="cancelled", error="job cancelled")
             on_step_finished(step_id, "cancelled")
-            sync_sqlite_steps_from_disk(str(claimed["job_id"]))
+            sync_sqlite_steps_from_pg(str(claimed["job_id"]))
             return "cancelled"
         finish_step(step_id, status="succeeded", exit_code=0)
         on_step_finished(step_id, "succeeded")
-        sync_sqlite_steps_from_disk(str(claimed["job_id"]))
+        sync_sqlite_steps_from_pg(str(claimed["job_id"]))
         return "succeeded"
     except Exception as error:  # noqa: BLE001
         message = "{}".format(error)
         finish_step(step_id, status="failed", error=message, exit_code=1)
         on_step_finished(step_id, "failed")
-        sync_sqlite_steps_from_disk(str(claimed["job_id"]))
+        sync_sqlite_steps_from_pg(str(claimed["job_id"]))
         if is_infra_error(message):
             raise
         return "failed"

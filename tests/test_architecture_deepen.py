@@ -64,7 +64,7 @@ class FinalizeStatusTests(unittest.TestCase):
                 conn_ctx.return_value.__enter__.return_value = conn
                 with mock.patch.object(orchestrator, "work_dir_for_job", return_value=work):
                     with mock.patch.object(orchestrator, "mirror_job_status") as mirror:
-                        with mock.patch.object(orchestrator, "sync_sqlite_steps_from_disk"):
+                        with mock.patch.object(orchestrator, "sync_sqlite_steps_from_pg"):
                             with mock.patch.object(orchestrator, "_publish_and_archive"):
                                 orchestrator._finalize_job("j1")
             mirror.assert_called_with("j1", "partial_success", None)
@@ -167,6 +167,75 @@ class JobSubmitTests(unittest.TestCase):
         self.assertTrue(used)
         plan.assert_called_once()
         start.assert_called_once_with("j1")
+
+    def test_submit_compensates_on_failure(self):
+        from web import job_submit
+
+        with mock.patch.object(job_submit, "enqueue_rq_pipeline", side_effect=RuntimeError("boom")):
+            with mock.patch.object(job_submit, "compensate_failed_enqueue") as comp:
+                with self.assertRaises(RuntimeError):
+                    job_submit.submit_analysis_task(
+                        job_id="j1",
+                        owner="u",
+                        sample="s",
+                        assemblers=["spades"],
+                        threads=2,
+                        spades_kmers=None,
+                        spades_careful=False,
+                        input_r1="//r1",
+                        input_r2="//r2",
+                        output_dir="/out",
+                        log_path="/log",
+                    )
+        comp.assert_called_once_with("j1")
+
+
+class CancelPollTests(unittest.TestCase):
+    def test_cancel_poll_injection(self):
+        from scripts import docker_executor
+
+        docker_executor.reset_executor_for_tests()
+        self.assertFalse(docker_executor._job_cancel_requested("j1"))
+        docker_executor.set_cancel_poll(lambda job_id: job_id == "j1")
+        self.assertTrue(docker_executor._job_cancel_requested("j1"))
+        docker_executor.reset_executor_for_tests()
+
+
+class CancelRequestTests(unittest.TestCase):
+    def test_request_cancel_stops_then_terminal(self):
+        from web import cancel
+
+        order = []
+
+        class Cur:
+            def execute(self, *args, **kwargs):
+                order.append("sql")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        class Conn:
+            def cursor(self):
+                return Cur()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with mock.patch.object(cancel, "use_rq_pipeline", return_value=True):
+            with mock.patch.object(cancel, "connection", return_value=Conn()):
+                with mock.patch.object(cancel, "utc_now", return_value="t"):
+                    with mock.patch.object(cancel, "_stop_containers", side_effect=lambda j: order.append("stop")):
+                        with mock.patch.object(cancel, "mirror_job_status", side_effect=lambda *a, **k: order.append("mirror")):
+                            with mock.patch.object(cancel, "sync_sqlite_steps_from_pg", side_effect=lambda j: order.append("sync")):
+                                cancel.request_cancel("j1")
+        self.assertIn("stop", order)
+        self.assertLess(order.index("stop"), order.index("mirror"))
 
 
 class RegistryBundledLabelTests(unittest.TestCase):

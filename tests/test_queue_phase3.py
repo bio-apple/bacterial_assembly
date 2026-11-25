@@ -81,7 +81,7 @@ class NoopJobTests(unittest.TestCase):
                                             rq_jobs, "on_step_finished"
                                         ) as nxt:
                                             with mock.patch.object(
-                                                rq_jobs, "sync_sqlite_steps_from_disk"
+                                                rq_jobs, "sync_sqlite_steps_from_pg"
                                             ):
                                                 result = rq_jobs.run_qc_step("s1")
         self.assertEqual(result, "succeeded")

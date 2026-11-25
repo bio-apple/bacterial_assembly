@@ -111,8 +111,8 @@ _Avoid_: 组装队列
 _Avoid_: 用任务状态代替步骤状态、用 Redis 消息代替步骤状态
 
 **步骤读模型**:
-任务页展示所用的步骤列表与进度视图；`postgres_rq` 下由磁盘 `stages.json` 同步到 SQLite，空表时由 PostgreSQL 适配器补齐，行形态与 SQLite `job_steps` 一致。
-_Avoid_: 把 Redis 队列当作步骤读模型
+任务页展示所用的步骤列表与进度视图；`postgres_rq` 下以 PostgreSQL 步骤为真源（`load_recorded_steps`），并可投影到 SQLite；不依赖 `stages.json` 作为 Web 读路径。
+_Avoid_: 把 Redis 队列或 stages.json 当作步骤读模型真源
 
 **任务入队**:
 创建分析或重新分析后，在 `TASK_BACKEND=postgres_rq` 下经同一适配器写入 Postgres 步骤并投递首个工作项。
@@ -173,15 +173,15 @@ Docker 构建所针对的 CPU/OS 平台，取值为 `linux/amd64` 或 `linux/arm
 _Avoid_: 宿主机架构（判定输入，不是 Docker 平台字符串）、把平台写进镜像 tag
 
 **应用运行时**:
-运行 Flask、Worker 与编排逻辑的环境（应用镜像不含组装/评估二进制）；生信软件在工具容器中执行。
-_Avoid_: 工具容器
+运行 Flask、Gunicorn、Worker 与编排逻辑的宿主机进程环境（不含组装/评估二进制）；生信软件在工具容器中执行。
+_Avoid_: 工具容器、应用容器镜像
 
 **工具容器**:
 为某一生信软件（或一组无依赖冲突的软件）启动的独立 Docker 容器，经挂载读写当前任务数据。
 _Avoid_: 应用运行时、微服务
 
 **工具运行时**:
-生信步骤的执行方式：`docker`（工具容器）或 `local`（同进程树内本地二进制）。Compose Worker 使用 `docker`；未设置时默认为 `local`。
+生信步骤的执行方式：`docker`（工具容器）或 `local`（同进程树内本地二进制）。推荐宿主机部署设为 `docker`；代码未设置时默认为 `local`。
 _Avoid_: 部署模式、分析模块
 
 **评估步骤**:

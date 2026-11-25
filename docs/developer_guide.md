@@ -5,7 +5,7 @@
 | 值 | 行为 |
 | --- | --- |
 | `sqlite` | 创建 / 重新分析只写 SQLite；由 `web.worker` 调 `run_pipeline.py`（单测默认） |
-| `postgres_rq` | 写 SQLite 读模型，并经 `web.job_submit.enqueue_rq_pipeline` 在 Postgres 建步骤、RQ 执行（Compose 默认） |
+| `postgres_rq` | 写 SQLite 读模型，并经 `web.job_submit.enqueue_rq_pipeline` 在 Postgres 建步骤、RQ 执行（推荐部署默认） |
 
 ## 关键模块
 
@@ -37,4 +37,4 @@ PYTHONPATH=. python -m unittest discover -s tests
 bash tests/smoke.sh
 ```
 
-架构：[architecture.md](architecture.md)。部署：[docker_deployment.md](docker_deployment.md)。
+架构：[architecture.md](architecture.md)。部署：[host_deployment.md](host_deployment.md)。

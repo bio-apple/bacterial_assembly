@@ -75,11 +75,27 @@ def _job_id() -> str | None:
     return value or None
 
 
-def _job_cancel_requested(job_id: str) -> bool:
-    try:
-        from web.step_store import job_cancel_requested
+_CANCEL_POLL = None
+_CONTAINER_RECORDER = None
 
-        return job_cancel_requested(job_id)
+
+def set_cancel_poll(callback) -> None:
+    """Inject CancelPoll adapter (e.g. web.step_store.job_cancel_requested)."""
+    global _CANCEL_POLL
+    _CANCEL_POLL = callback
+
+
+def set_container_recorder(callback) -> None:
+    """Inject set_container adapter without importing web from this module at load time."""
+    global _CONTAINER_RECORDER
+    _CONTAINER_RECORDER = callback
+
+
+def _job_cancel_requested(job_id: str) -> bool:
+    if _CANCEL_POLL is None:
+        return False
+    try:
+        return bool(_CANCEL_POLL(job_id))
     except Exception:
         return False
 
@@ -202,11 +218,9 @@ class DockerExecutor:
                 privileged=False,
             )
             step_id = os.environ.get("_ASSEMBLY_STEP_ID", "").strip()
-            if step_id:
+            if step_id and _CONTAINER_RECORDER is not None:
                 try:
-                    from web.step_store import set_container
-
-                    set_container(step_id, container.id, image)
+                    _CONTAINER_RECORDER(step_id, container.id, image)
                 except Exception:
                     pass
             try:
@@ -307,5 +321,7 @@ def get_executor() -> DockerExecutor:
 
 
 def reset_executor_for_tests() -> None:
-    global _DEFAULT_EXECUTOR
+    global _DEFAULT_EXECUTOR, _CANCEL_POLL, _CONTAINER_RECORDER
     _DEFAULT_EXECUTOR = None
+    _CANCEL_POLL = None
+    _CONTAINER_RECORDER = None

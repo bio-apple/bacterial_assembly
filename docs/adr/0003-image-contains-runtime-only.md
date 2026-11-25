@@ -1,7 +1,7 @@
 ---
-status: accepted
+status: superseded by ADR 0020
 ---
 
-# 应用镜像仅含运行依赖
+# 应用镜像仅含运行依赖（已废止）
 
-应用镜像基于 `anaconda/miniconda`，安装 Web/Worker 运行依赖（Python、Flask、Gunicorn、编排库）与上传校验用的 ValidateFastq / OpenJDK。不内嵌 fastp、组装软件或 QUAST；生信步骤在工具侧车镜像中执行（ADR 0010）。不把仓库源码打进镜像；运行时只读挂载仓库到 `/opt/bacterial-assembly`。构建平台见 ADR 0019（宿主机判定，可覆盖；`linux/amd64` 或 `linux/arm64`）。
+曾规定应用镜像基于 conda/miniconda，仅含 Web/Worker 与 ValidateFastq。ADR 0020 起推荐部署改为宿主机运行时，不再构建应用镜像；生信步骤仍在工具侧车中（ADR 0010）。
