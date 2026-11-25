@@ -33,9 +33,34 @@
       "L50": "达到总长一半所需的 contig 条数。",
       "GC (%)": "序列中 G 与 C 碱基所占百分比。"
     } %}
+    {% set highlight = ["Total length", "# contigs", "Largest contig", "N50", "GC (%)"] %}
+
+    <section class="compare-kpi" aria-label="指标摘要">
+      {% for key in highlight %}
+      {% set ns = namespace(left=none, right=none) %}
+      {% for row in rows %}
+        {% if row.metric == key %}
+          {% if ns.left is none and row.left is not none %}{% set ns.left = row.left %}{% endif %}
+          {% if ns.right is none and row.right is not none %}{% set ns.right = row.right %}{% endif %}
+        {% endif %}
+      {% endfor %}
+      <article>
+        <span>{{ key }} <abbr class="metric-tip" title="{{ tips.get(key, '来自比较表。') }}">?</abbr></span>
+        <strong>{% if ns.left is none %}—{% else %}{{ ns.left }}{% endif %}</strong>
+        <span class="checksum">甲 · 首个写出值</span>
+        <strong style="margin-top:8px;display:block">{% if ns.right is none %}—{% else %}{{ ns.right }}{% endif %}</strong>
+        <span class="checksum">乙 · 首个写出值</span>
+      </article>
+      {% endfor %}
+    </section>
+
+    <div class="compare-toolbar">
+      <button type="button" class="button" id="export-compare-csv">导出当前表 CSV</button>
+      <span class="report-note">导出内容来自本页已渲染的真实比较表，不是新的后端接口。</span>
+    </div>
 
     <div class="compare-scroll">
-      <table class="compare-table">
+      <table class="compare-table" id="compare-table">
         <thead>
           <tr>
             <th scope="col">组装器</th>
@@ -62,5 +87,27 @@
     </div>
     <footer class="page-footer"><span>MICROBIAL NGS</span><span>RUN COMPARISON</span><span>RESULTS ARE USER-SCOPED</span></footer>
   </main>
+  <script>
+    (function () {
+      const button = document.querySelector("#export-compare-csv");
+      const table = document.querySelector("#compare-table");
+      if (!button || !table) return;
+      button.addEventListener("click", () => {
+        const rows = [...table.querySelectorAll("tr")].map((tr) =>
+          [...tr.children].map((cell) => {
+            const text = cell.textContent.replace(/\s+/g, " ").trim().replace(/"/g, '""');
+            return `"${text}"`;
+          }).join(",")
+        );
+        const blob = new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "compare-current-table.csv";
+        link.click();
+        URL.revokeObjectURL(url);
+      });
+    })();
+  </script>
 </body>
 </html>

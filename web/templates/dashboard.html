@@ -124,23 +124,30 @@
           <div class="wizard-panel" data-wizard-panel="3" role="tabpanel" hidden>
             <p class="eyebrow">STEP 03 · ASSEMBLY CONFIG</p>
             <fieldset class="assembler-select">
-              <legend>组装方法 <small>至少选择一种 · 按选择顺序运行</small></legend>
-              <div class="assembler-options">
+              <legend>组装方法 <small>至少选择一种 · 用上移/下移调整执行顺序</small></legend>
+              <div class="assembler-card-list" id="assembler-card-list">
                 {% set assembler_blurbs = {
-                  "spades": "短读长 de Bruijn 图组装",
-                  "unicycler": "细菌短读长组装流程",
-                  "shovill": "细菌基因组快速组装封装",
-                  "megahit": "大规模短读长组装"
+                  "spades": "短读长 de Bruijn 图组装。常见于标准 Illumina 细菌基因组。",
+                  "unicycler": "细菌短读长组装流程。适合需要较干净细菌组装图的场景。",
+                  "shovill": "细菌基因组快速组装封装（含 SKESA 等）。侧重速度与常规分离株。",
+                  "megahit": "面向大规模短读长的高效组装。适合体量较大的数据。"
                 } %}
                 {% for assembler in assemblers %}
-                <label class="assembler-option">
-                  <input type="checkbox" name="assembler" value="{{ assembler }}">
-                  <span class="check-box"></span>
-                  <span>
+                <div class="assembler-card" data-assembler-card="{{ assembler }}">
+                  <label class="assembler-option" style="border:0;padding:0;background:transparent;box-shadow:none">
+                    <input type="checkbox" name="assembler" value="{{ assembler }}">
+                    <span class="check-box"></span>
+                  </label>
+                  <div>
                     <strong>{{ assembler }}</strong>
                     <span class="tool-meta">{{ assembler_blurbs.get(assembler, "短读长组装方法") }}</span>
-                  </span>
-                </label>
+                    <p class="selection-order" data-order-label hidden></p>
+                  </div>
+                  <div class="order-actions">
+                    <button type="button" data-assembler-up="{{ assembler }}" aria-label="上移 {{ assembler }}" disabled>↑</button>
+                    <button type="button" data-assembler-down="{{ assembler }}" aria-label="下移 {{ assembler }}" disabled>↓</button>
+                  </div>
+                </div>
                 {% endfor %}
               </div>
               <p class="selection-order" id="selection-order">选择顺序即执行顺序。</p>

@@ -577,6 +577,71 @@
       }
       runLane(lane, file);
     });
+    const dropZone = lane.input.closest(".file-lane");
+    if (dropZone) {
+      ["dragenter", "dragover"].forEach((type) => {
+        dropZone.addEventListener(type, (event) => {
+          event.preventDefault();
+          dropZone.classList.add("is-drop-target");
+        });
+      });
+      ["dragleave", "drop"].forEach((type) => {
+        dropZone.addEventListener(type, (event) => {
+          event.preventDefault();
+          dropZone.classList.remove("is-drop-target");
+        });
+      });
+      dropZone.addEventListener("drop", (event) => {
+        const file = event.dataTransfer && event.dataTransfer.files[0];
+        if (!file) return;
+        const transfer = new DataTransfer();
+        transfer.items.add(file);
+        lane.input.files = transfer.files;
+        onFile(lane);
+      });
+    }
+  }
+
+  function syncAssemblerCards() {
+    assemblerOrderField.value = JSON.stringify(assemblerOrder);
+    selectionOrderLabel.textContent = assemblerOrder.length
+      ? `执行顺序：${assemblerOrder.join(" → ")}`
+      : "选择顺序即执行顺序。";
+    document.querySelectorAll("[data-assembler-card]").forEach((card) => {
+      const name = card.dataset.assemblerCard;
+      const selected = assemblerOrder.includes(name);
+      card.classList.toggle("is-selected", selected);
+      const orderLabel = card.querySelector("[data-order-label]");
+      if (orderLabel) {
+        if (selected) {
+          orderLabel.hidden = false;
+          orderLabel.textContent = `顺序 ${assemblerOrder.indexOf(name) + 1}`;
+        } else {
+          orderLabel.hidden = true;
+          orderLabel.textContent = "";
+        }
+      }
+      const up = card.querySelector("[data-assembler-up]");
+      const down = card.querySelector("[data-assembler-down]");
+      const index = assemblerOrder.indexOf(name);
+      if (up) up.disabled = !selected || index <= 0;
+      if (down) down.disabled = !selected || index < 0 || index >= assemblerOrder.length - 1;
+    });
+    const spades = form.querySelector('input[name="assembler"][value="spades"]');
+    spadesOptions.hidden = !(spades && spades.checked);
+  }
+
+  function moveAssembler(name, delta) {
+    const index = assemblerOrder.indexOf(name);
+    if (index < 0) return;
+    const next = index + delta;
+    if (next < 0 || next >= assemblerOrder.length) return;
+    const copy = assemblerOrder.slice();
+    const [item] = copy.splice(index, 1);
+    copy.splice(next, 0, item);
+    assemblerOrder = copy;
+    syncAssemblerCards();
+    updateReviewSummary();
   }
 
   form.querySelectorAll('input[name="assembler"]').forEach((input) => {
@@ -587,13 +652,17 @@
       } else {
         assemblerOrder = assemblerOrder.filter((item) => item !== input.value);
       }
-      assemblerOrderField.value = JSON.stringify(assemblerOrder);
-      selectionOrderLabel.textContent = assemblerOrder.length
-        ? `执行顺序：${assemblerOrder.join(" / ")}`
-        : "选择顺序即执行顺序。";
-      spadesOptions.hidden = !form.querySelector('input[name="assembler"][value="spades"]').checked;
+      syncAssemblerCards();
+      updateReviewSummary();
     });
   });
+  document.querySelectorAll("[data-assembler-up]").forEach((button) => {
+    button.addEventListener("click", () => moveAssembler(button.dataset.assemblerUp, -1));
+  });
+  document.querySelectorAll("[data-assembler-down]").forEach((button) => {
+    button.addEventListener("click", () => moveAssembler(button.dataset.assemblerDown, 1));
+  });
+  syncAssemblerCards();
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();

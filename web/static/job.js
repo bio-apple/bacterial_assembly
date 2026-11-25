@@ -86,7 +86,7 @@
         const stepItem = document.createElement("li");
         stepItem.className = `stage-step state-${step.state}`;
         stepItem.dataset.stageId = step.id;
-        appendText(stepItem, "stage-step-label", step.label);
+        appendText(stepItem, "stage-step-label", step.summary || step.label || step.id);
         const meta = document.createElement("span");
         meta.className = "stage-step-meta";
         if (step.percent !== null && step.percent !== undefined) {
@@ -94,6 +94,15 @@
         }
         appendText(meta, "stage-state", stateLabels[step.state] || step.state);
         stepItem.append(meta);
+        if (step.started_at || step.finished_at) {
+          const times = document.createElement("span");
+          times.className = "stage-step-times";
+          const bits = [];
+          if (step.started_at) bits.push(`开始 ${formatTimestamp(step.started_at)}`);
+          if (step.finished_at) bits.push(`结束 ${formatTimestamp(step.finished_at)}`);
+          times.textContent = bits.join(" · ");
+          stepItem.append(times);
+        }
         if (step.detail) {
           const detail = document.createElement("small");
           detail.textContent = step.detail;
@@ -281,9 +290,32 @@
       pill.className = `status-pill status-${step.status}`;
       pill.textContent = labels[step.status] || step.status;
       state.append(pill);
-      line.append(name, state);
+      const started = document.createElement("td");
+      started.className = "mono";
+      started.textContent = step.started_at ? formatTimestamp(step.started_at) : "—";
+      const ended = document.createElement("td");
+      ended.className = "mono";
+      ended.textContent = step.completed_at ? formatTimestamp(step.completed_at) : "—";
+      const duration = document.createElement("td");
+      duration.className = "mono";
+      duration.textContent = formatStepDuration(step.started_at, step.completed_at) || "—";
+      line.append(name, state, started, ended, duration);
       body.append(line);
     }
+  }
+
+  function formatStepDuration(startedAt, endedAt) {
+    if (!startedAt || !endedAt) return "";
+    const start = Date.parse(startedAt);
+    const end = Date.parse(endedAt);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return "";
+    const seconds = Math.floor((end - start) / 1000);
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    if (hours) return `${hours}小时 ${minutes}分`;
+    if (minutes) return `${minutes}分 ${secs}秒`;
+    return `${secs}秒`;
   }
 
   function renderComparison(detail) {
@@ -487,6 +519,11 @@
       await refreshJob();
     });
   }
+
+  document.querySelectorAll("[data-step-duration]").forEach((node) => {
+    const text = formatStepDuration(node.dataset.started, node.dataset.ended);
+    if (text) node.textContent = text;
+  });
 
   refreshJob();
   refreshLog();

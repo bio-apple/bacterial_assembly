@@ -1,25 +1,25 @@
 :root {
   color-scheme: light;
-  --paper: #F5F7F8;
+  --paper: #F6F7F5;
   --surface: #FFFFFF;
-  --ink: #172B2A;
-  --muted: #71817F;
+  --ink: #1D2927;
+  --muted: #77827E;
   --faint: #94A3A1;
-  --line: #E4E9EC;
+  --line: #E5E9E6;
   --soft: #EEF2F3;
-  --deep: #105E55;
-  --brand: #167D70;
-  --brand-deep: #105E55;
-  --teal: #167D70;
+  --deep: #10584F;
+  --brand: #176B60;
+  --brand-deep: #10584F;
+  --teal: #176B60;
   --teal-soft: #E3F3F0;
-  --coral: #CE4B4B;
+  --coral: #C64C4C;
   --coral-soft: #FCEAEA;
-  --amber: #C58A28;
-  --success: #16845B;
+  --amber: #C18A32;
+  --success: #23845B;
   --success-soft: #E3F5EE;
-  --info: #2878C7;
-  --running: #2878C7;
-  --focus: #167D70;
+  --info: #3478C8;
+  --running: #3478C8;
+  --focus: #176B60;
   --sidebar: #123833;
   --sidebar-text: #D7E8E4;
   --radius: 12px;
@@ -27,7 +27,7 @@
   --shadow: 0 1px 2px rgba(23, 43, 42, 0.04), 0 6px 18px rgba(23, 43, 42, 0.04);
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --sans: Inter, "Noto Sans SC", ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Segoe UI", Arial, sans-serif;
-  --display: Inter, "Noto Sans SC", ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Segoe UI", Arial, sans-serif;
+  --display: Sora, Inter, "Noto Sans SC", ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Segoe UI", Arial, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -1673,3 +1673,63 @@ body.workbench > main {
   body.workbench > .topbar { padding-left: 64px; }
   .wizard-tabs { grid-template-columns: 1fr 1fr; }
 }
+
+
+/* —— Round 2 pipeline / assembler cards / compare —— */
+h1, h2, .intro-text h1, .login-shell h1 { font-family: var(--display); }
+.pipeline-timeline .stage-rail { gap: 14px; }
+.pipeline-timeline .stage-method {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.pipeline-timeline .stage-step-times {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font: 11px/1.4 var(--mono);
+}
+.assembler-card-list { display: grid; gap: 10px; }
+.assembler-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: start;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.assembler-card.is-selected {
+  border-color: var(--brand);
+  background: var(--teal-soft);
+  box-shadow: inset 0 0 0 1px var(--brand);
+}
+.assembler-card .tool-meta { color: var(--muted); font-size: 12px; line-height: 1.45; }
+.assembler-card .order-actions { display: grid; gap: 6px; }
+.assembler-card .order-actions button {
+  min-width: 36px; min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+}
+.assembler-card .order-actions button:disabled { opacity: .4; cursor: not-allowed; }
+.file-lane.is-drop-target { border-color: var(--brand); background: var(--teal-soft); }
+.compare-kpi {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 0 0 18px;
+}
+.compare-kpi article {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.compare-kpi span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.compare-kpi strong { font: 700 18px/1.2 var(--mono); }
+.compare-toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 12px; }

@@ -62,10 +62,10 @@
 
     <div class="monitor-layout">
       <div class="monitor-main">
-        <section class="panel monitor-block" aria-labelledby="rail-title">
+        <section class="panel monitor-block pipeline-timeline" aria-labelledby="rail-title">
           <div class="monitor-section-head">
-            <h2 id="rail-title">阶段流水线</h2>
-            <p>按本次选择的顺序执行。没有可靠比例时，只显示阶段状态。</p>
+            <h2 id="rail-title">组装流水线</h2>
+            <p>按所选组装方法串行执行。阶段状态来自真实步骤记录；无可靠比例时不显示百分比。</p>
           </div>
           <ol class="stage-rail" id="stage-rail">
             {% for group in progress.groups %}
@@ -79,11 +79,17 @@
                 <ol class="stage-substeps">
                   {% for step in group.steps %}
                   <li class="stage-step state-{{ step.state }}" data-stage-id="{{ step.id }}">
-                    <span class="stage-step-label">{{ step.label }}</span>
+                    <span class="stage-step-label">{{ step.summary or step.label }}</span>
                     <span class="stage-step-meta">
                       {% if step.percent is not none %}<span class="stage-percent">{{ step.percent }}%</span>{% endif %}
                       <span class="stage-state">{{ state_labels.get(step.state, step.state) }}</span>
                     </span>
+                    {% if step.started_at or step.finished_at %}
+                    <span class="stage-step-times">
+                      {% if step.started_at %}开始 {{ step.started_at }}{% endif %}
+                      {% if step.finished_at %} · 结束 {{ step.finished_at }}{% endif %}
+                    </span>
+                    {% endif %}
                     {% if step.detail %}<small>{{ step.detail }}</small>{% endif %}
                   </li>
                   {% endfor %}
@@ -97,19 +103,28 @@
         <section class="panel monitor-block" id="step-ledger" aria-labelledby="step-title">
           <div class="monitor-section-head">
             <h2 id="step-title">分析步骤</h2>
-            <p>一个组装器失败时，其余步骤仍继续。</p>
+            <p>一个组装方法失败时，其余步骤仍继续。时间为步骤读模型中的真实字段。</p>
           </div>
           <p id="step-ledger-empty" class="report-note"{% if detail.steps %} hidden{% endif %}>还没有步骤记录。</p>
           <div class="compare-scroll" id="step-ledger-table"{% if not detail.steps %} hidden{% endif %}>
             <table class="compare-table step-sheet">
               <thead>
-                <tr><th>分析步骤</th><th>状态</th></tr>
+                <tr>
+                  <th>分析步骤</th>
+                  <th>状态</th>
+                  <th>开始</th>
+                  <th>结束</th>
+                  <th>耗时</th>
+                </tr>
               </thead>
               <tbody id="step-ledger-body"{% if not detail.steps %} hidden{% endif %}>
                 {% for step in detail.steps %}
                 <tr>
                   <th scope="row">{{ step.label }}{% if step.error %}<small>{{ step.error }}</small>{% endif %}{% if step.exit_code is not none %}<span class="checksum">退出码 {{ step.exit_code }}</span>{% endif %}</th>
                   <td>{{ status_pill(step.status) }}</td>
+                  <td class="mono">{{ step.started_at or "—" }}</td>
+                  <td class="mono">{{ step.completed_at or "—" }}</td>
+                  <td class="mono" data-step-duration data-started="{{ step.started_at or '' }}" data-ended="{{ step.completed_at or '' }}">—</td>
                 </tr>
                 {% endfor %}
               </tbody>
