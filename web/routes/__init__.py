@@ -7,6 +7,14 @@ register_blueprints hooks extracted blueprints as they are added.
 
 from __future__ import annotations
 
+from flask import Blueprint
 
-def register_blueprints(app) -> None:
-    return None
+from web.routes import jobs as jobs_routes
+from web.routes import uploads as uploads_routes
+
+
+def register_blueprints(app, hooks) -> None:
+    http_bp = Blueprint("http_handlers", __name__)
+    uploads_routes.register_routes(http_bp, hooks)
+    jobs_routes.register_routes(http_bp, hooks)
+    app.register_blueprint(http_bp, name="")

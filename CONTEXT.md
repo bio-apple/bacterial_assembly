@@ -111,8 +111,8 @@ _Avoid_: 组装队列
 _Avoid_: 用任务状态代替步骤状态、用 Redis 消息代替步骤状态
 
 **步骤读模型**:
-任务页展示所用的步骤列表与进度视图；`postgres_rq` 下以 PostgreSQL 步骤为真源（`load_recorded_steps`），并可投影到 SQLite；不依赖 `stages.json` 作为 Web 读路径。
-_Avoid_: 把 Redis 队列或 stages.json 当作步骤读模型真源
+分析任务页的工作项列表、流水线时间线与失败阶段投影的唯一 Web 读路径；`postgres_rq` 下以 PostgreSQL 步骤为真源，并可投影到 SQLite。计划骨架来自组装方法对应的计划步骤，状态一律为步骤状态。不依赖 `stages.json` 作为 Web 读路径。
+_Avoid_: 把 Redis 队列或 stages.json 当作步骤读模型真源；任务页双真源（台账一套、时间线另一套）
 
 **任务入队**:
 创建分析或重新分析后，在 `TASK_BACKEND=postgres_rq` 下经同一适配器写入 Postgres 步骤并投递首个工作项。

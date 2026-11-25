@@ -1,32 +1,38 @@
-"""Upload, job query, and report helpers used by the Flask wiring module."""
+"""Job query helpers and thin re-exports for Flask wiring."""
 
 from __future__ import annotations
 
 import csv
-import errno
-import hashlib
 import json
 import os
 import re
 import shutil
 import sqlite3
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
-from flask import abort, current_app, send_file
-from werkzeug.utils import secure_filename
+from flask import abort, current_app
 
-from scripts.stage_record import build_progress, load_stage_record
 from web.host_monitor import format_bytes, snapshot
-from web.job_paths import pipeline_root_candidates, stage_record_path
+from web.job_paths import pipeline_root_candidates
+from web.report_io import send_regular_report, store_report_files, write_regular_file
 from web.reports import THRESHOLD_ABSENT, scope_comparison
-from web.steps import step_rows
 from web.storage_paths import contained_path, is_inside
-from web.task_backend import use_rq_pipeline
+from web.upload_io import (
+    FASTQ_SUFFIXES,
+    assemble_upload,
+    chunk_byte_length,
+    fastq_extension,
+    parse_byte_size,
+    received_indexes,
+    serialize_upload,
+    session_directory,
+    valid_fastq_filename,
+    validated_fastq_name,
+    write_exact_stream,
+)
 
 ASSEMBLERS = ("spades", "unicycler", "shovill", "megahit")
-FASTQ_SUFFIXES = (".fastq.gz", ".fq.gz", ".fastq", ".fq")
 RESULT_FILENAMES = {"comparison.tsv"}
 RESULT_SUFFIXES = (".fasta", ".fa", ".fna", ".fas")
 FASTP_JSON_LIMIT = 20 * 1024 * 1024
@@ -56,133 +62,6 @@ def data_file(raw: str | None) -> Path | None:
     except (OSError, RuntimeError, ValueError):
         return None
     return path if path.is_file() else None
-
-
-def session_directory(staging_root: Path, upload_id: str) -> Path:
-    try:
-        parsed = uuid.UUID(str(upload_id))
-    except (TypeError, ValueError, AttributeError):
-        raise LookupError("Upload not found")
-    root = staging_root.resolve()
-    directory = (root / str(parsed)).resolve()
-    if directory == root or not is_inside(root, directory):
-        raise LookupError("Upload not found")
-    return directory
-
-
-def validated_fastq_name(filename: object) -> str | None:
-    if not isinstance(filename, str) or not filename or len(filename) > 240:
-        return None
-    if any(mark in filename for mark in ("..", "/", "\\", "\x00")):
-        return None
-    safe = secure_filename(filename)
-    if safe.lower() != filename.lower() or not valid_fastq_filename(safe):
-        return None
-    return safe
-
-
-def parse_byte_size(value: object) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        size = value
-    elif isinstance(value, str) and re.fullmatch(r"[1-9]\d*", value):
-        size = int(value)
-    else:
-        return None
-    if size < 1 or size > 2**62:
-        return None
-    return size
-
-
-def chunk_byte_length(total: int, chunk_size: int, index: int, chunk_count: int) -> int:
-    if index < 0 or index >= chunk_count:
-        raise ValueError("分片序号超出范围。")
-    if index == chunk_count - 1:
-        return total - chunk_size * (chunk_count - 1)
-    return chunk_size
-
-
-def write_exact_stream(stream, destination: Path, expected: int) -> None:
-    partial = destination.with_name(destination.name + ".part")
-    written = 0
-    try:
-        with partial.open("wb") as handle:
-            while written < expected:
-                block = stream.read(min(1024 * 1024, expected - written))
-                if not block:
-                    break
-                handle.write(block)
-                written += len(block)
-            extra = stream.read(1)
-        if extra or written != expected:
-            raise ValueError("分片大小与上传会话不一致。")
-        os.replace(partial, destination)
-    except Exception:
-        partial.unlink(missing_ok=True)
-        raise
-
-
-def assemble_upload(
-    chunk_dir: Path, total: int, chunk_size: int, chunk_count: int, destination: Path
-) -> str:
-    partial = destination.with_name(destination.name + ".part")
-    digest = hashlib.sha256()
-    try:
-        with partial.open("wb") as output:
-            for index in range(chunk_count):
-                expected = chunk_byte_length(total, chunk_size, index, chunk_count)
-                source = chunk_dir / "{:08d}".format(index)
-                if (
-                    not source.is_file()
-                    or source.stat().st_size != expected
-                    or not is_inside(chunk_dir, source)
-                ):
-                    raise ValueError("仍有分片未上传。")
-                with source.open("rb") as handle:
-                    while True:
-                        block = handle.read(1024 * 1024)
-                        if not block:
-                            break
-                        digest.update(block)
-                        output.write(block)
-        if partial.stat().st_size != total:
-            raise ValueError("仍有分片未上传。")
-        os.replace(partial, destination)
-    except Exception:
-        partial.unlink(missing_ok=True)
-        raise
-    return digest.hexdigest()
-
-
-def received_indexes(staging_root: Path, row: sqlite3.Row) -> list[int]:
-    chunk_dir = session_directory(staging_root, row["id"]) / "chunks"
-    found = []
-    if not chunk_dir.is_dir():
-        return found
-    for index in range(row["chunk_count"]):
-        expected = chunk_byte_length(row["size"], row["chunk_size"], index, row["chunk_count"])
-        path = chunk_dir / "{:08d}".format(index)
-        try:
-            if path.is_file() and path.stat().st_size == expected and is_inside(chunk_dir, path):
-                found.append(index)
-        except OSError:
-            continue
-    return found
-
-
-def serialize_upload(row: sqlite3.Row, received: list[int]) -> dict:
-    return {
-        "id": row["id"],
-        "role": row["role"],
-        "filename": row["filename"],
-        "size": row["size"],
-        "chunk_size": row["chunk_size"],
-        "chunk_count": row["chunk_count"],
-        "received": received,
-        "status": row["status"],
-        "sha256": row["sha256"],
-    }
 
 
 def host_view(data_root: Path) -> dict:
@@ -274,8 +153,6 @@ def notable_output_files(output_dir: str) -> list[str]:
     return found
 
 
-
-
 def pipeline_directories(output_dir: str) -> list[Path]:
     try:
         output = contained_path(current_app.config["DATA_ROOT"], output_dir)
@@ -309,17 +186,6 @@ def read_regular_text(directory: Path, relative: str, limit: int) -> str | None:
         return None
 
 
-
-
-def pipeline_stages(output_dir: str) -> list[dict]:
-    try:
-        output = contained_path(current_app.config["DATA_ROOT"], output_dir)
-    except (OSError, ValueError):
-        return []
-    record = load_stage_record(stage_record_path(output))
-    return record["stages"]
-
-
 def report_metric_row(assembler: str, text: str | None) -> dict | None:
     if not text or not text.strip():
         return None
@@ -332,41 +198,51 @@ def report_metric_row(assembler: str, text: str | None) -> dict | None:
     return {"assembler": assembler, "metrics": metrics}
 
 
-def filtered_comparison(directories: list[Path], assemblers: list[str] | None, evaluation: str, stages: list[dict]):
+def filtered_comparison(
+    directories: list[Path],
+    assemblers: list[str] | None,
+    evaluation: str,
+    work_items: list[dict] | None = None,
+):
+    """Compare QUAST scopes from on-disk reports; absent via succeeded 工作项 without report."""
+    succeeded = {
+        item["name"]
+        for item in work_items or []
+        if item.get("status") == "succeeded" and isinstance(item.get("name"), str)
+    }
     rows = []
     absent = {}
     folder = QUAST_SCOPE_DIRS[evaluation]
-    stage_id_suffix = ":quast:{}".format(evaluation)
-    skipped = {
-        stage["id"][: -len(stage_id_suffix)]
-        for stage in stages
-        if stage.get("id", "").endswith(stage_id_suffix)
-        and stage.get("state") == "done"
-        and stage.get("detail") == THRESHOLD_ABSENT
-    }
     for name in assemblers or []:
         if name not in ASSEMBLERS:
             continue
-        parsed = report_metric_row(
-            name,
-            first_pipeline_text(
-                directories,
-                "quast/{}/{}/report.tsv".format(name, folder),
-                2 * 1024 * 1024,
-            ),
+        text = first_pipeline_text(
+            directories,
+            "quast/{}/{}/report.tsv".format(name, folder),
+            2 * 1024 * 1024,
         )
+        parsed = report_metric_row(name, text)
         if parsed is not None:
             rows.append(parsed)
-        elif name in skipped:
+            continue
+        quast_id = "{}:quast:{}".format(name, evaluation)
+        if quast_id in succeeded:
             absent[name] = THRESHOLD_ABSENT
     return rows, absent
 
 
-def pipeline_comparisons(output_dir: str, assemblers: list[str] | None, original_rows: list[dict], directories: list[Path]):
-    stages = pipeline_stages(output_dir)
+def pipeline_comparisons(
+    output_dir: str,
+    assemblers: list[str] | None,
+    original_rows: list[dict],
+    directories: list[Path],
+    work_items: list[dict] | None = None,
+):
     views = [scope_comparison("original", assemblers, original_rows)]
     for evaluation in ("gt500", "gt1000"):
-        rows, absent = filtered_comparison(directories, assemblers, evaluation, stages)
+        rows, absent = filtered_comparison(
+            directories, assemblers, evaluation, work_items=work_items
+        )
         views.append(
             scope_comparison(
                 evaluation,
@@ -462,24 +338,6 @@ def load_fastp_documents(directories: list[Path]) -> list[dict]:
     return documents
 
 
-def stage_failures(row: sqlite3.Row) -> list[dict]:
-    try:
-        output_dir = contained_path(current_app.config["DATA_ROOT"], row["output_dir"])
-        record_path = stage_record_path(output_dir)
-    except (OSError, ValueError):
-        return []
-    failures = []
-    for stage in load_stage_record(record_path).get("stages") or []:
-        if not isinstance(stage, dict) or stage.get("state") != "failed":
-            continue
-        item = {"id": stage.get("id"), "label": stage.get("label") or stage.get("id")}
-        detail = stage.get("detail")
-        if isinstance(detail, str) and detail.strip():
-            item["detail"] = detail.strip()
-        failures.append(item)
-    return failures
-
-
 def input_facts(row: sqlite3.Row) -> list[dict]:
     facts = []
     for role, key in (("R1", "input_r1"), ("R2", "input_r2")):
@@ -499,48 +357,6 @@ def input_facts(row: sqlite3.Row) -> list[dict]:
                     item["bytes"] = None
         facts.append(item)
     return facts
-
-
-def write_regular_file(path: Path, payload: bytes) -> None:
-    if path.is_symlink():
-        raise OSError(errno.ELOOP, "report path is a symlink")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    fd = os.open(path, flags, 0o644)
-    try:
-        os.write(fd, payload)
-    finally:
-        os.close(fd)
-
-
-def store_report_files(job_id: str, html: str, tsv: str) -> tuple[Path, Path]:
-    root = Path(current_app.config["REPORTS_ROOT"]).resolve()
-    directory = root / str(uuid.UUID(str(job_id)))
-    if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
-        raise OSError(errno.ELOOP, "report directory is not a real directory")
-    if directory != root and root not in directory.resolve(strict=False).parents:
-        raise OSError(errno.EPERM, "report directory escapes the reports root")
-    directory.mkdir(parents=True, exist_ok=True)
-    if directory.is_symlink() or not directory.is_dir() or not is_inside(root, directory):
-        raise OSError(errno.ELOOP, "report directory is not a real directory")
-    html_path = directory / "report.html"
-    tsv_path = directory / "report.tsv"
-    write_regular_file(html_path, html.encode("utf-8"))
-    write_regular_file(tsv_path, tsv.encode("utf-8"))
-    return html_path, tsv_path
-
-
-def send_regular_report(path: Path, download_name: str, mimetype: str):
-    root = Path(current_app.config["REPORTS_ROOT"]).resolve()
-    if path.is_symlink() or not path.is_file() or not is_inside(root, path):
-        abort(404)
-    return send_file(
-        path,
-        as_attachment=True,
-        download_name=download_name,
-        mimetype=mimetype,
-    )
 
 
 def comparison_file(output_dir: str) -> Path | None:
@@ -657,55 +473,22 @@ def parse_positive_int(value: str) -> int | None:
     return parsed if parsed > 0 else None
 
 
-def valid_fastq_filename(filename: str) -> bool:
-    safe_name = secure_filename(filename or "").lower()
-    return bool(safe_name) and safe_name.endswith(FASTQ_SUFFIXES)
-
-
-def fastq_extension(filename: str) -> str:
-    lowered = secure_filename(filename).lower()
-    return next(suffix for suffix in FASTQ_SUFFIXES if lowered.endswith(suffix))
-
-
 def recorded_steps(row: sqlite3.Row) -> list[dict]:
-    try:
-        assemblers = json.loads(row["assemblers"])
-    except (TypeError, json.JSONDecodeError):
-        return []
-    from web.step_read_model import load_recorded_steps
+    from web.step_read_model import job_step_view
 
-    return load_recorded_steps(row["id"], assemblers)
+    return job_step_view(row)["work_items"]
+
+
+def stage_failures(row: sqlite3.Row) -> list[dict]:
+    from web.step_read_model import job_step_view
+
+    return job_step_view(row)["failures"]
 
 
 def job_progress(row: sqlite3.Row) -> dict:
-    try:
-        output_dir = contained_path(current_app.config["DATA_ROOT"], row["output_dir"])
-        record_path = stage_record_path(output_dir)
-    except (OSError, RuntimeError, ValueError):
-        record_path = current_app.config["DATA_ROOT"] / "missing-stage-record.json"
-    record = load_stage_record(record_path)
-    status = row["status"]
-    if use_rq_pipeline() and status == "queued":
-        try:
-            from web.pg import connection
+    from web.step_read_model import job_step_view
 
-            with connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT status FROM jobs WHERE id = %s", (row["id"],))
-                    pg_job = cur.fetchone()
-            if pg_job and pg_job["status"]:
-                status = pg_job["status"]
-        except Exception:
-            pass
-    progress = build_progress(json.loads(row["assemblers"]), record, status)
-    if not progress["updated_at"]:
-        progress["updated_at"] = row["updated_at"]
-    seconds = elapsed_seconds(row["started_at"], row["completed_at"])
-    progress["elapsed_seconds"] = seconds
-    progress["elapsed_label"] = (
-        "等待开始" if seconds is None else format_duration(seconds)
-    )
-    return progress
+    return job_step_view(row)["progress"]
 
 
 def serialize_job(row: sqlite3.Row) -> dict:

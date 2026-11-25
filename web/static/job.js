@@ -19,10 +19,12 @@
 
   const statusLabels = window.JOB_STATUS_LABELS;
   const stateLabels = {
-    waiting: "等待",
+    queued: "排队中",
     running: "进行中",
-    done: "完成",
+    succeeded: "已完成",
     failed: "失败",
+    cancelled: "已取消",
+    skipped: "未执行",
   };
   const logViewer = window.createLogViewer(log, {
     getJobId: () => jobId,
@@ -193,7 +195,7 @@
     if (job.detail) {
       renderResources(job.detail.resources);
       renderQc(job);
-      renderSteps(job.detail.steps);
+      renderSteps(job.work_items || job.detail.steps);
       renderComparison(job.detail);
       renderReports(job.detail.report_ready);
       refreshHost(job.status);

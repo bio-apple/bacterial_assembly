@@ -105,6 +105,55 @@ class StepReadModelTests(unittest.TestCase):
         self.assertIn("fastp", names)
         self.assertIn("comparison", names)
 
+    def test_project_progress_uses_step_statuses(self):
+        from web.step_read_model import project_progress, work_item_failures
+
+        items = [
+            {
+                "name": "fastp",
+                "label": "质量过滤",
+                "status": "succeeded",
+                "started_at": "2026-01-01T00:00:00Z",
+                "completed_at": "2026-01-01T00:01:00Z",
+                "exit_code": 0,
+                "error": None,
+                "software": "fastp",
+                "group": "fastp",
+                "group_title": "fastp",
+                "kind": "fastp",
+                "step_label": "质量过滤",
+            },
+            {
+                "name": "spades",
+                "label": "SPAdes · 组装",
+                "status": "failed",
+                "started_at": "2026-01-01T00:01:00Z",
+                "completed_at": "2026-01-01T00:02:00Z",
+                "exit_code": 1,
+                "error": "boom",
+                "software": "SPAdes",
+                "group": "spades",
+                "group_title": "SPAdes",
+                "kind": "assembly",
+                "step_label": "组装",
+            },
+        ]
+        progress = project_progress(items, "failed", updated_at="2026-01-01T00:02:00Z")
+        self.assertEqual(progress["groups"][0]["state"], "succeeded")
+        self.assertEqual(progress["groups"][1]["state"], "failed")
+        self.assertEqual(progress["current"]["id"], "spades")
+        self.assertEqual(progress["stages"][0]["state"], "succeeded")
+        failures = work_item_failures(items)
+        self.assertEqual(failures, [{"id": "spades", "label": "SPAdes · 组装", "detail": "boom"}])
+
+
+class PagesStyleSyncTests(unittest.TestCase):
+    def test_assets_style_matches_web_static(self):
+        root = Path(__file__).resolve().parents[1]
+        web_css = (root / "web" / "static" / "style.css").read_bytes()
+        pages_css = (root / "assets" / "style.css").read_bytes()
+        self.assertEqual(web_css, pages_css)
+
 
 class ResourceEnvTests(unittest.TestCase):
     def test_apply_resource_env_sets_memory(self):

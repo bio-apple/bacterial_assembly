@@ -15,7 +15,14 @@
 </head>
 <body class="workbench">
   {% include "_topbar.html" %}
-  {% set state_labels = {"waiting": "等待", "running": "进行中", "done": "完成", "failed": "失败"} %}
+  {% set state_labels = {
+    "queued": "排队中",
+    "running": "进行中",
+    "succeeded": "已完成",
+    "failed": "失败",
+    "cancelled": "已取消",
+    "skipped": "未执行"
+  } %}
   <main id="main-content" class="dashboard monitor-page" data-job-monitor data-job-id="{{ job.id }}">
     <header class="monitor-intro">
       <div>

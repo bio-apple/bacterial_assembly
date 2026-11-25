@@ -37,7 +37,6 @@ from werkzeug.security import generate_password_hash
 
 import run_pipeline
 from scripts.common import cpu_share
-from scripts.stage_record import StageRecord
 from web.app import SCHEMA, create_app, elapsed_seconds, format_duration
 from web.errors import explain_job_failure
 from web.fastq_check import records_accepted
@@ -517,24 +516,39 @@ class WebWorkbenchTests(unittest.TestCase):
         )
         self.assertNotIn("spades", queued_ids)
         self.assertNotIn("unicycler", queued_ids)
-        self.assertTrue(all(stage["state"] == "waiting" for stage in queued["progress"]["stages"]))
+        self.assertTrue(all(stage["state"] == "queued" for stage in queued["progress"]["stages"]))
         self.assertTrue(all(stage["percent"] is None for stage in queued["progress"]["stages"]))
+        self.assertEqual(len(queued["work_items"]), len(queued_ids))
+        self.assertTrue(all(item["status"] == "queued" for item in queued["work_items"]))
 
-        stage_path = (
-            Path(self.app.config["DATA_ROOT"]) / "jobs" / job_id / "work" / "stages.json"
-        )
-        record = StageRecord(stage_path, ["shovill", "megahit"])
-        record.finish("fastp")
-        record.finish("shovill")
-        for evaluation in ("original", "gt500", "gt1000"):
-            record.finish("shovill:quast:{}".format(evaluation))
-        record.start("megahit")
         started = "2026-01-01T00:00:00Z"
+        step_rows = [
+            ("fastp", "succeeded"),
+            ("shovill", "succeeded"),
+            ("shovill:quast:original", "succeeded"),
+            ("shovill:quast:gt500", "succeeded"),
+            ("shovill:quast:gt1000", "succeeded"),
+            ("megahit", "running"),
+        ]
         with closing(sqlite3.connect(self.app.config["DATABASE"])) as database:
             database.execute(
                 "UPDATE jobs SET status = 'running', started_at = ?, updated_at = ? WHERE id = ?",
                 (started, started, job_id),
             )
+            for name, status in step_rows:
+                database.execute(
+                    "INSERT INTO job_steps (job_id, step_name, status, started_at, completed_at, exit_code, error) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        job_id,
+                        name,
+                        status,
+                        started,
+                        started if status == "succeeded" else None,
+                        0 if status == "succeeded" else None,
+                        None,
+                    ),
+                )
             database.commit()
 
         running = self.client.get("/api/jobs/{}".format(job_id)).json["job"]
@@ -553,6 +567,10 @@ class WebWorkbenchTests(unittest.TestCase):
         running_ids = [stage["id"] for stage in running["progress"]["stages"]]
         self.assertNotIn("spades", running_ids)
         self.assertNotIn("unicycler", running_ids)
+        self.assertEqual(
+            next(item["status"] for item in running["work_items"] if item["name"] == "megahit"),
+            "running",
+        )
 
         page = self.client.get("/jobs/{}".format(job_id))
         self.assertEqual(page.status_code, 200)

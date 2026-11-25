@@ -90,13 +90,11 @@ from web.job_support import (
     elapsed_seconds,
     fastp_html_file,
     fastq_extension,
-    filtered_comparison,
     first_pipeline_text,
     format_duration,
     host_view,
     input_facts,
     inputs_ready,
-    job_progress,
     load_fastp_documents,
     notable_output_files,
     output_name_rejected,
@@ -107,14 +105,11 @@ from web.job_support import (
     parse_positive_int,
     pipeline_comparisons,
     pipeline_directories,
-    pipeline_stages,
     received_indexes,
-    recorded_steps,
     resolve_output_file,
     serialize_job,
     serialize_upload,
     session_directory,
-    stage_failures,
     store_report_files,
     valid_fastq_filename,
     validated_fastq_name,
@@ -122,6 +117,7 @@ from web.job_support import (
     write_regular_file,
     send_regular_report,
 )
+from web.step_read_model import job_step_view
 
 JOB_STATUSES = ("queued", "running", "cancelling", "cancelled", "succeeded", "partial_success", "failed")
 PATH_FIELDS = {
@@ -328,9 +324,6 @@ def create_app(test_config: dict | None = None) -> Flask:
         db.close()
 
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
-    from web.routes import register_blueprints
-
-    register_blueprints(app)
 
     @app.after_request
     def security_headers(response):
@@ -483,7 +476,7 @@ def create_app(test_config: dict | None = None) -> Flask:
                     }
         return sample_name, batch
 
-    def job_detail(row: sqlite3.Row) -> dict:
+    def job_detail(row: sqlite3.Row, step_view: dict | None = None) -> dict:
         sample_name, batch = linked_sample(row)
         directories = pipeline_directories(row["output_dir"])
         run_log = first_pipeline_text(directories, "run.log", 2 * 1024 * 1024)
@@ -491,7 +484,11 @@ def create_app(test_config: dict | None = None) -> Flask:
         assemblers = selected_assemblers(row["assemblers"])
         comparison_text = first_pipeline_text(directories, "comparison.tsv", 2 * 1024 * 1024)
         parsed = parse_comparison_text(comparison_text)
-        comparisons = pipeline_comparisons(row["output_dir"], assemblers, parsed, directories)
+        view = step_view if step_view is not None else job_step_view(row)
+        work_items = view["work_items"]
+        comparisons = pipeline_comparisons(
+            row["output_dir"], assemblers, parsed, directories, work_items=work_items
+        )
         return {
             "sample_name": sample_name,
             "sample_id": column_value(row, "sample_id"),
@@ -506,14 +503,14 @@ def create_app(test_config: dict | None = None) -> Flask:
             "resources": resources,
             "comparison": comparisons[0],
             "comparisons": comparisons,
-            "steps": recorded_steps(row),
+            "steps": work_items,
             "qc": qc_sheet(load_fastp_documents(directories)),
             "fastp_html": fastp_html_file(directories) is not None,
             "report_ready": result_sources_present(
                 first_pipeline_text(directories, "versions.txt", 1024 * 1024),
                 load_fastp_documents(directories),
                 parsed,
-                stage_failures(row),
+                view["failures"],
             ),
             "inputs_available": inputs_ready(row),
         }
@@ -526,13 +523,20 @@ def create_app(test_config: dict | None = None) -> Flask:
         comparison_rows = parse_comparison_text(
             first_pipeline_text(directories, "comparison.tsv", 2 * 1024 * 1024)
         )
-        failures = stage_failures(row)
+        step_view = job_step_view(row)
+        failures = step_view["failures"]
         if not result_sources_present(
             versions_text, fastp_documents, comparison_rows, failures
         ):
             return None
         assemblers = selected_assemblers(row["assemblers"])
-        comparisons = pipeline_comparisons(row["output_dir"], assemblers, comparison_rows, directories)
+        comparisons = pipeline_comparisons(
+            row["output_dir"],
+            assemblers,
+            comparison_rows,
+            directories,
+            work_items=step_view["work_items"],
+        )
         resources = resource_lines(
             row["threads"],
             first_pipeline_text(directories, "run.log", 2 * 1024 * 1024),
@@ -914,787 +918,26 @@ def create_app(test_config: dict | None = None) -> Flask:
             received = []
         return serialize_upload(row, received)
 
-    @app.post("/api/uploads")
-    @login_required
-    def create_upload():
-        require_csrf()
-        payload = request.get_json(silent=True)
-        if not isinstance(payload, dict):
-            return fail("parameter_invalid", parameter_message("上传参数不正确。"), 400)
-        if PATH_FIELDS.intersection(payload) or PATH_FIELDS.intersection(request.args):
-            return fail("path_rejected", "不能通过请求指定服务器路径。", 400)
-        filename = validated_fastq_name(payload.get("filename"))
-        if filename is None:
-            return fail(
-                "fastq_invalid",
-                "FASTQ 格式错误。文件名必须是 .fastq、.fq、.fastq.gz 或 .fq.gz，且不能包含路径。",
-                400,
-            )
-        size = parse_byte_size(payload.get("size"))
-        if size is None:
-            return fail("fastq_invalid", "FASTQ 格式错误。文件是空的或大小不正确。", 400)
-        role = payload.get("role")
-        if role not in ("r1", "r2"):
-            return fail("fastq_invalid", "FASTQ 格式错误。上传必须标明 R1 或 R2。", 400)
-        chunk_size = app.config["UPLOAD_CHUNK_SIZE"]
-        chunk_count = (size + chunk_size - 1) // chunk_size
-        upload_id = str(uuid.uuid4())
-        try:
-            directory = session_directory(app.config["STAGING_ROOT"], upload_id)
-            directory.mkdir(parents=True)
-            (directory / "chunks").mkdir()
-        except OSError as error:
-            return storage_error(error, "Could not create upload staging directory")
-        try:
-            with connection() as db:
-                db.execute(
-                    "INSERT INTO uploads (id, owner, role, filename, size, chunk_size, "
-                    "chunk_count, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')",
-                    (
-                        upload_id,
-                        session["username"],
-                        role,
-                        filename,
-                        size,
-                        chunk_size,
-                        chunk_count,
-                    ),
-                )
-        except sqlite3.Error:
-            shutil.rmtree(directory, ignore_errors=True)
-            raise
-        return jsonify(upload=upload_payload(load_owned_upload(upload_id))), 201
+    from types import SimpleNamespace
+    from web.routes import register_blueprints
 
-    @app.get("/api/uploads/<upload_id>")
-    @login_required
-    def upload_status(upload_id):
-        row = load_owned_upload(upload_id)
-        if row is None:
-            return fail("not_found", "找不到对应的上传。", 404)
-        return jsonify(upload=upload_payload(row))
-
-    @app.put("/api/uploads/<upload_id>/chunks/<int:index>")
-    @login_required
-    def upload_chunk(upload_id, index):
-        require_csrf()
-        if PATH_FIELDS.intersection(request.args):
-            return fail("path_rejected", "不能通过请求指定服务器路径。", 400)
-        row = load_owned_upload(upload_id)
-        if row is None:
-            return fail("not_found", "找不到对应的上传。", 404)
-        if row["status"] in ("completed", "consumed"):
-            return fail("conflict", "上传已结束，不能再写入分片。", 409)
-        if index < 0 or index >= row["chunk_count"]:
-            return fail("upload_failed", "文件上传错误。分片序号超出范围。", 400)
-        expected = chunk_byte_length(row["size"], row["chunk_size"], index, row["chunk_count"])
-        try:
-            chunk_dir = session_directory(app.config["STAGING_ROOT"], row["id"]) / "chunks"
-            chunk_dir.mkdir(parents=True, exist_ok=True)
-            destination = chunk_dir / "{:08d}".format(index)
-            if not is_inside(chunk_dir, destination):
-                return fail("path_rejected", "不能通过请求指定服务器路径。", 400)
-            skipped = destination.is_file() and destination.stat().st_size == expected
-            if not skipped:
-                write_exact_stream(request.stream, destination, expected)
-        except ValueError as error:
-            return upload_value_error(error)
-        except OSError as error:
-            return storage_error(error, "Could not store upload chunk")
-        received = received_indexes(app.config["STAGING_ROOT"], row)
-        status = "uploading" if received else row["status"]
-        with connection() as db:
-            db.execute(
-                "UPDATE uploads SET status = ?, "
-                "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
-                "WHERE id = ? AND owner = ? AND status IN ('pending', 'uploading', 'failed')",
-                (status, row["id"], session["username"]),
-            )
-        updated = load_owned_upload(row["id"])
-        return jsonify(upload=serialize_upload(updated, received), skipped=skipped)
-
-    @app.post("/api/uploads/<upload_id>/complete")
-    @login_required
-    def complete_upload(upload_id):
-        require_csrf()
-        payload = request.get_json(silent=True)
-        if not isinstance(payload, dict):
-            return fail("parameter_invalid", parameter_message("上传参数不正确。"), 400)
-        if PATH_FIELDS.intersection(payload) or PATH_FIELDS.intersection(request.args):
-            return fail("path_rejected", "不能通过请求指定服务器路径。", 400)
-        supplied = payload.get("sha256")
-        if not isinstance(supplied, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", supplied):
-            return fail("checksum_mismatch", "SHA-256 校验不一致。", 400)
-        supplied = supplied.lower()
-        row = load_owned_upload(upload_id)
-        if row is None:
-            return fail("not_found", "找不到对应的上传。", 404)
-        if row["status"] == "consumed":
-            return fail("conflict", "上传已结束，不能再写入分片。", 409)
-        if row["status"] == "completed":
-            if row["sha256"] == supplied:
-                return jsonify(upload=upload_payload(row))
-            return fail("checksum_mismatch", "SHA-256 校验不一致。", 400)
-        try:
-            directory = session_directory(app.config["STAGING_ROOT"], row["id"])
-            extension = fastq_extension(row["filename"])
-            staged = directory / ("read" + extension)
-            if not is_inside(directory, staged):
-                return fail("path_rejected", "不能通过请求指定服务器路径。", 400)
-            digest = assemble_upload(
-                directory / "chunks",
-                row["size"],
-                row["chunk_size"],
-                row["chunk_count"],
-                staged,
-            )
-        except LookupError:
-            return fail("not_found", "找不到对应的上传。", 404)
-        except ValueError as error:
-            return upload_value_error(error)
-        except OSError as error:
-            return storage_error(error, "Could not assemble upload")
-        if not hmac.compare_digest(digest, supplied):
-            staged.unlink(missing_ok=True)
-            with connection() as db:
-                db.execute(
-                    "UPDATE uploads SET status = 'failed', sha256 = NULL, assembled_path = NULL, "
-                    "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
-                    "WHERE id = ? AND owner = ?",
-                    (row["id"], session["username"]),
-                )
-            return fail("checksum_mismatch", "SHA-256 校验不一致。", 400)
-        try:
-            validate_fastq_for_analysis(
-                staged,
-                app.config.get("FASTQ_CHECK_COMMAND"),
-                log_dir=app.config["TEMP_ROOT"] / "fastq-checks" / row["id"],
-            )
-        except FastqRecordError as error:
-            staged.unlink(missing_ok=True)
-            with connection() as db:
-                db.execute(
-                    "UPDATE uploads SET status = 'failed', sha256 = NULL, assembled_path = NULL, "
-                    "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
-                    "WHERE id = ? AND owner = ?",
-                    (row["id"], session["username"]),
-                )
-            message = str(error)
-            if "记录无法通过检查" not in message:
-                message = FASTQ_RECORDS
-            return fail("fastq_invalid", message, 400)
-        except FastqCheckUnavailable:
-            staged.unlink(missing_ok=True)
-            app.logger.exception("Could not check uploaded FASTQ records")
-            return fail("resource_unavailable", FASTQ_CHECK_UNAVAILABLE, 503)
-        validated_dir = app.config["UPLOAD_VALIDATED"] / directory.name
-        destination = validated_dir / staged.name
-        try:
-            if not is_inside(app.config["UPLOAD_VALIDATED"], destination):
-                raise ValueError("path is outside the data root")
-            relocate_file(staged, destination)
-        except OSError as error:
-            staged.unlink(missing_ok=True)
-            return storage_error(error, "Could not store validated upload")
-        try:
-            with connection() as db:
-                cursor = db.execute(
-                    "UPDATE uploads SET status = 'completed', sha256 = ?, assembled_path = ?, "
-                    "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
-                    "WHERE id = ? AND owner = ? AND status IN ('pending', 'uploading', 'failed')",
-                    (digest, str(destination), row["id"], session["username"]),
-                )
-                if cursor.rowcount != 1:
-                    raise ValueError("上传已结束，不能再写入分片。")
-        except (sqlite3.Error, ValueError):
-            destination.unlink(missing_ok=True)
-            raise
-        shutil.rmtree(directory / "chunks", ignore_errors=True)
-        try:
-            directory.rmdir()
-        except OSError:
-            pass
-        updated = load_owned_upload(row["id"])
-        return jsonify(upload=serialize_upload(updated, []))
-
-    @app.post("/api/jobs")
-    @login_required
-    def create_job():
-        require_csrf()
-        if "threads" in request.values or "memory" in request.values:
-            return fail("parameter_invalid", PARAMETER_THREADS, 400)
-        selected_assemblers = request.form.getlist("assembler")
-        if not selected_assemblers or any(item not in ASSEMBLERS for item in selected_assemblers):
-            return fail("parameter_invalid", parameter_message("请至少选择一种有效的组装软件。"), 400)
-        if len(set(selected_assemblers)) != len(selected_assemblers):
-            return fail("parameter_invalid", parameter_message("同一种组装软件不能选择两次。"), 400)
-        try:
-            assembler_list = json.loads(request.form.get("assembler_order", "[]"))
-        except json.JSONDecodeError:
-            return fail("parameter_invalid", parameter_message("组装软件的顺序不正确。"), 400)
-        if (
-            not isinstance(assembler_list, list)
-            or any(item not in ASSEMBLERS for item in assembler_list)
-            or any(not isinstance(item, str) for item in assembler_list)
-            or len(assembler_list) != len(selected_assemblers)
-            or set(assembler_list) != set(selected_assemblers)
-        ):
-            return fail("parameter_invalid", parameter_message("组装软件的顺序与所选工具不一致。"), 400)
-        try:
-            threads = read_runtime_limits()["method_threads"]
-        except (OSError, RuntimeError, ValueError):
-            app.logger.exception("Could not read CPU allocation")
-            return fail("resource_unavailable", RESOURCE_START, 503)
-        sample = request.form.get("sample", "sample")
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", sample):
-            return fail("parameter_invalid", parameter_message("样本名包含不支持的字符。"), 400)
-        kmers_text = request.form.get("spades_kmers", "").strip()
-        if kmers_text and "spades" not in assembler_list:
-            return fail("parameter_invalid", parameter_message("使用 SPAdes 参数时必须选择 SPAdes。"), 400)
-        if kmers_text and not re.fullmatch(r"[1-9][0-9]*(,[1-9][0-9]*)*", kmers_text):
-            return fail("parameter_invalid", PARAMETER_KMER, 400)
-        if kmers_text and any(
-            int(kmer) > 127 or int(kmer) % 2 == 0 for kmer in kmers_text.split(",")
-        ):
-            return fail("parameter_invalid", PARAMETER_KMER, 400)
-        if request.form.get("spades_careful") and "spades" not in assembler_list:
-            return fail("parameter_invalid", parameter_message("使用 SPAdes 参数时必须选择 SPAdes。"), 400)
-        if PATH_FIELDS.intersection(request.form) or PATH_FIELDS.intersection(request.args):
-            return fail("path_rejected", "不能通过请求指定服务器路径。", 400)
-
-        r1_session = request.form.get("r1_session", "").strip()
-        r2_session = request.form.get("r2_session", "").strip()
-        claimed = None
-        if r1_session or r2_session:
-            if not r1_session or not r2_session or r1_session == r2_session:
-                return fail("fastq_invalid", "FASTQ 格式错误。R1 和 R2 必须是两个不同的已完成上传。", 400)
-            try:
-                claimed = (
-                    require_completed_upload(r1_session),
-                    require_completed_upload(r2_session),
-                )
-            except LookupError:
-                return fail("not_found", "找不到对应的上传。", 404)
-            except ValueError as error:
-                return upload_value_error(error)
-            if Path(claimed[0]["assembled_path"]).resolve() == Path(
-                claimed[1]["assembled_path"]
-            ).resolve():
-                return fail("fastq_invalid", "FASTQ 格式错误。R1 和 R2 必须是两个不同的已完成上传。", 400)
-            read_names = tuple(
-                "R{}".format(index) + fastq_extension(upload["filename"])
-                for index, upload in enumerate(claimed, start=1)
-            )
-            original_names = (claimed[0]["filename"], claimed[1]["filename"])
-            original_sha = (
-                checksum_or_none(claimed[0]["sha256"]),
-                checksum_or_none(claimed[1]["sha256"]),
-            )
-        else:
-            r1 = request.files.get("r1")
-            r2 = request.files.get("r2")
-            if not r1 or not r2 or not valid_fastq_filename(r1.filename) or not valid_fastq_filename(r2.filename):
-                return fail("fastq_invalid", FASTQ_INVALID, 400)
-            read_names = (
-                "R1" + fastq_extension(r1.filename),
-                "R2" + fastq_extension(r2.filename),
-            )
-            original_names = (secure_filename(r1.filename), secure_filename(r2.filename))
-            original_sha = (None, None)
-        job_id = str(uuid.uuid4())
-        incoming_dir = app.config["UPLOAD_INCOMING"] / job_id
-        validated_dir = app.config["UPLOAD_VALIDATED"] / job_id
-        job_dir = app.config["JOBS_ROOT"] / job_id
-        input_dir = job_dir / "input"
-        work_dir = job_dir / "work"
-        output_dir = job_dir / "output"
-        logs_dir = job_dir / "logs"
-        incoming_paths = [incoming_dir / name for name in read_names]
-        validated_paths = [validated_dir / name for name in read_names]
-        input_paths = [input_dir / name for name in read_names]
-        log_path = logs_dir / "job.log"
-        stored_files = [*incoming_paths, *validated_paths, *input_paths, log_path]
-        stored_dirs = [
-            logs_dir,
-            output_dir,
-            work_dir,
-            input_dir,
-            job_dir,
-            validated_dir,
-            incoming_dir,
-        ]
-        restored = []
-
-        def restore_staged_reads():
-            for destination, source in reversed(restored):
-                if destination.is_file():
-                    relocate_file(destination, source)
-
-        try:
-            if claimed:
-                for directory in (input_dir, work_dir, output_dir, logs_dir):
-                    directory.mkdir(parents=True)
-                for upload, destination in zip(claimed, input_paths):
-                    source = contained_path(
-                        app.config["UPLOAD_VALIDATED"], upload["assembled_path"]
-                    )
-                    if not source.is_file() or not source.stat().st_size:
-                        raise ValueError("上传尚未完成或校验未通过，不能开始分析。")
-                    relocate_file(source, destination)
-                    restored.append((destination, source))
-            else:
-                incoming_dir.mkdir(parents=True)
-                r1.save(incoming_paths[0])
-                r2.save(incoming_paths[1])
-                if (
-                    not incoming_paths[0].is_file()
-                    or not incoming_paths[1].is_file()
-                    or not incoming_paths[0].stat().st_size
-                    or not incoming_paths[1].stat().st_size
-                ):
-                    raise ValueError("FASTQ uploads cannot be empty.")
-                for incoming in incoming_paths:
-                    validate_fastq_for_analysis(
-                        incoming,
-                        app.config.get("FASTQ_CHECK_COMMAND"),
-                        log_dir=app.config["TEMP_ROOT"] / "fastq-checks" / job_id,
-                    )
-                validated_dir.mkdir(parents=True)
-                for source, destination in zip(incoming_paths, validated_paths):
-                    relocate_file(source, destination)
-                incoming_dir.rmdir()
-                for directory in (input_dir, work_dir, output_dir, logs_dir):
-                    directory.mkdir(parents=True)
-                for source, destination in zip(validated_paths, input_paths):
-                    relocate_file(source, destination)
-                validated_dir.rmdir()
-            pair_log = app.config["TEMP_ROOT"] / "fastq-checks" / job_id
-            validate_read_pair_for_job(input_paths[0], input_paths[1], log_dir=pair_log)
-            for name in ("fastq_pair.log", "fastq_pair.json"):
-                source = pair_log / name
-                if source.is_file():
-                    relocate_file(source, logs_dir / name)
-            log_path.write_text(
-                "MODULE: {}\nSTATUS: queued\n".format(BACTERIAL_ASSEMBLY_MODULE_ID),
-                encoding="utf-8",
-            )
-            with connection() as db:
-                sample_id = reuse_or_create_sample(db, session["username"], sample)
-                batch_id = str(uuid.uuid4())
-                db.execute(
-                    "INSERT INTO sequencing_batches (id, owner, sample_id, r1_filename, "
-                    "r2_filename, r1_sha256, r2_sha256) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        batch_id,
-                        session["username"],
-                        sample_id,
-                        original_names[0],
-                        original_names[1],
-                        original_sha[0],
-                        original_sha[1],
-                    ),
-                )
-                db.execute(
-                    "INSERT INTO jobs (id, owner, module_id, status, assemblers, threads, "
-                    "sample, spades_kmers, spades_careful, input_r1, input_r2, "
-                    "output_dir, log_path, sample_id, sequencing_batch_id) "
-                    "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        job_id,
-                        session["username"],
-                        BACTERIAL_ASSEMBLY_MODULE_ID,
-                        json.dumps(assembler_list),
-                        threads,
-                        sample,
-                        kmers_text or None,
-                        int(bool(request.form.get("spades_careful"))),
-                        str(input_paths[0]),
-                        str(input_paths[1]),
-                        str(output_dir),
-                        str(log_path),
-                        sample_id,
-                        batch_id,
-                    ),
-                )
-                if claimed:
-                    for upload, destination in zip(claimed, input_paths):
-                        cursor = db.execute(
-                            "UPDATE uploads SET status = 'consumed', assembled_path = ?, "
-                            "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
-                            "WHERE id = ? AND owner = ? AND status = 'completed'",
-                            (str(destination), upload["id"], session["username"]),
-                        )
-                        if cursor.rowcount != 1:
-                            raise ValueError("上传尚未完成或校验未通过，不能开始分析。")
-                note_job(db, session["username"], sample, job_id, "submitted")
-        except OSError as error:
-            restore_staged_reads()
-            discard_stored_files(stored_files, stored_dirs)
-            return storage_error(error, "Could not save uploaded FASTQ files")
-        except FastqCheckUnavailable:
-            restore_staged_reads()
-            discard_stored_files(stored_files, stored_dirs)
-            app.logger.exception("Could not check uploaded FASTQ records")
-            return fail("resource_unavailable", FASTQ_CHECK_UNAVAILABLE, 503)
-        except ValueError as error:
-            restore_staged_reads()
-            discard_stored_files(stored_files, stored_dirs)
-            return upload_value_error(error)
-        except sqlite3.Error:
-            restore_staged_reads()
-            discard_stored_files(stored_files, stored_dirs)
-            raise
-        if claimed:
-            for upload in claimed:
-                try:
-                    session_directory(app.config["STAGING_ROOT"], upload["id"]).rmdir()
-                except OSError:
-                    pass
-        try:
-            from web.job_submit import submit_analysis_task
-
-            submit_analysis_task(
-                job_id=job_id,
-                owner=session["username"],
-                sample=sample,
-                assemblers=assembler_list,
-                threads=threads,
-                spades_kmers=kmers_text or None,
-                spades_careful=bool(request.form.get("spades_careful")),
-                input_r1=str(input_paths[0]),
-                input_r2=str(input_paths[1]),
-                output_dir=str(output_dir),
-                log_path=str(log_path),
-            )
-        except Exception:
-            app.logger.exception("Could not enqueue RQ pipeline for %s", job_id)
-            return fail("resource_unavailable", "无法启动分析队列，请稍后重试。", 503)
-        return jsonify(job={"id": job_id, "status": "queued"}), 202
-
-    @app.post("/api/jobs/<job_id>/cancel")
-    @login_required
-    def cancel_job(job_id):
-        require_csrf()
-        try:
-            uuid.UUID(job_id)
-        except ValueError:
-            abort(404)
-        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        with connection() as db:
-            db.execute("BEGIN IMMEDIATE")
-            row = db.execute(
-                "SELECT * FROM jobs WHERE id = ? AND owner = ?",
-                (job_id, session["username"]),
-            ).fetchone()
-            if row is None:
-                abort(404)
-            status = row["status"]
-            if status in ("succeeded", "partial_success", "failed", "cancelled", "cancelling"):
-                return fail("cancel_rejected", "这个任务已经不能取消。", 409)
-            if status == "queued":
-                updated = db.execute(
-                    "UPDATE jobs SET status = 'cancelled', cancel_requested = 1, "
-                    "cancel_requested_at = ?, updated_at = ?, completed_at = ? "
-                    "WHERE id = ? AND owner = ? AND status = 'queued'",
-                    (timestamp, timestamp, timestamp, job_id, session["username"]),
-                )
-                if updated.rowcount == 1:
-                    note_job(db, row["owner"], row["sample"], job_id, "cancelled")
-                    try:
-                        append_job_log(
-                            contained_path(app.config["DATA_ROOT"], row["log_path"]),
-                            "STATUS: cancelled",
-                        )
-                    except ValueError:
-                        pass
-                    fresh = db.execute(
-                        "SELECT * FROM jobs WHERE id = ?", (job_id,)
-                    ).fetchone()
-                    try:
-                        from web.cancel import request_cancel
-
-                        request_cancel(job_id)
-                    except Exception:
-                        app.logger.exception("RQ cancel failed for %s", job_id)
-                    return jsonify(job=serialize_job(fresh)), 200
-                row = db.execute(
-                    "SELECT * FROM jobs WHERE id = ? AND owner = ?",
-                    (job_id, session["username"]),
-                ).fetchone()
-                status = row["status"] if row else None
-                if status in ("succeeded", "partial_success", "failed", "cancelled", "cancelling"):
-                    return fail("cancel_rejected", "这个任务已经不能取消。", 409)
-            updated = db.execute(
-                "UPDATE jobs SET cancel_requested = 1, cancel_requested_at = ?, updated_at = ? "
-                "WHERE id = ? AND owner = ? AND status = 'running'",
-                (timestamp, timestamp, job_id, session["username"]),
-            )
-            if updated.rowcount != 1:
-                return fail("cancel_rejected", "这个任务已经不能取消。", 409)
-            fresh = db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
-        try:
-            from web.cancel import request_cancel
-
-            request_cancel(job_id)
-        except Exception:
-            app.logger.exception("RQ cancel failed for %s", job_id)
-        return jsonify(job=serialize_job(fresh)), 202
-
-    @app.get("/jobs/<job_id>")
-    @login_required
-    def job_page(job_id):
-        row = owned_job(job_id)
-        return render_template(
-            "job.html",
-            username=session["username"],
-            csrf_token=csrf_token(),
-            job=serialize_job(row),
-            progress=job_progress(row),
-            detail=job_detail(row),
-        )
-
-    @app.get("/api/jobs/<job_id>")
-    @login_required
-    def job_status(job_id):
-        row = owned_job(job_id)
-        job = serialize_job(row)
-        job["progress"] = job_progress(row)
-        job["detail"] = job_detail(row)
-        return jsonify(job=job)
-
-    @app.get("/jobs/<job_id>/fastp.html")
-    @login_required
-    def fastp_html(job_id):
-        row = owned_job(job_id)
-        path = fastp_html_file(pipeline_directories(row["output_dir"]))
-        if path is None:
-            abort(404)
-        response = send_file(path, mimetype="text/html; charset=utf-8", as_attachment=False)
-        response.headers["X-Fastp-Report"] = "1"
-        response.headers["Content-Disposition"] = "inline"
-        return response
-
-    @app.get("/jobs/<job_id>/report")
-    @login_required
-    def job_report(job_id):
-        row = owned_job(job_id)
-        report = job_report_model(row)
-        if report is None:
-            abort(404, description="这份任务还没有可导出的结果。")
-        return render_template(
-            "report.html",
-            username=session["username"],
-            csrf_token=csrf_token(),
-            job=serialize_job(row),
-            report=report,
-            fastp_html=fastp_html_file(pipeline_directories(row["output_dir"])) is not None,
-        )
-
-    @app.get("/api/jobs/<job_id>/reports/<kind>")
-    @login_required
-    def download_job_report(job_id, kind):
-        if kind not in ("html", "tsv"):
-            abort(404)
-        row = owned_job(job_id)
-        report = job_report_model(row)
-        if report is None:
-            abort(404, description="这份任务还没有可导出的结果。")
-        html = render_template(
-            "report_document.html",
-            report=report,
-            job=serialize_job(row),
-            fastp_html=fastp_html_file(pipeline_directories(row["output_dir"])) is not None,
-        )
-        try:
-            html_path, tsv_path = store_report_files(row["id"], html, report_tsv(report))
-        except OSError as error:
-            if getattr(error, "errno", None) in (errno.ELOOP, errno.EPERM):
-                abort(404)
-            return storage_error(error, "Could not store job report")
-        path = html_path if kind == "html" else tsv_path
-        suffix = "html" if kind == "html" else "tsv"
-        mimetype = "text/html; charset=utf-8" if kind == "html" else "text/plain; charset=utf-8"
-        return send_regular_report(
-            path,
-            download_name="assembly-report-{}.{}".format(row["id"][:8], suffix),
-            mimetype=mimetype,
-        )
-
-    @app.get("/api/jobs/<job_id>/log")
-    @login_required
-    def job_log(job_id):
-        row = owned_job(job_id)
-        try:
-            offset = max(0, int(request.args.get("offset", "0")))
-        except ValueError:
-            return fail("parameter_invalid", parameter_message("日志偏移必须是非负整数。"), 400)
-        log_path = data_file(row["log_path"])
-        if log_path is None:
-            return jsonify(text="", offset=0, status=row["status"])
-        with log_path.open("rb") as log_file:
-            log_file.seek(min(offset, log_path.stat().st_size))
-            chunk = log_file.read(128 * 1024)
-            next_offset = log_file.tell()
-        return jsonify(
-            text=chunk.decode("utf-8", errors="replace"),
-            offset=next_offset,
-            status=row["status"],
-        )
-
-    @app.get("/api/jobs/<job_id>/log/download")
-    @login_required
-    def download_job_log(job_id):
-        row = owned_job(job_id)
-        log_path = data_file(row["log_path"])
-        if log_path is None:
-            abort(404, description="Job log is not available")
-        return send_file(
-            log_path,
-            as_attachment=True,
-            download_name="{}-{}.log".format(row["sample"], job_id[:8]),
-            mimetype="text/plain; charset=utf-8",
-        )
-
-    @app.get("/api/jobs/<job_id>/download")
-    @login_required
-    def download_job(job_id):
-        row = owned_job(job_id)
-        if not row["archive_path"]:
-            abort(409, description="Results are not ready for download")
-        archive = data_file(row["archive_path"])
-        if archive is None:
-            abort(404)
-        return send_file(
-            archive,
-            as_attachment=True,
-            download_name="assembly-{}.tar.gz".format(job_id),
-            mimetype="application/gzip",
-        )
-
-    @app.get("/api/jobs/<job_id>/files")
-    @login_required
-    def download_job_file(job_id):
-        row = owned_job(job_id)
-        path = resolve_output_file(row["output_dir"], request.args.get("name", ""))
-        download_name = secure_filename(path.name) or "result"
-        return send_file(
-            path,
-            as_attachment=True,
-            download_name=download_name,
-            mimetype="application/octet-stream",
-        )
-
-    def rerun_response(payload: dict, status_code: int):
-        wants_json = bool(request.headers.get("X-CSRF-Token")) or (
-            "application/json" in request.headers.get("Accept", "")
-        )
-        if wants_json:
-            return jsonify(payload), status_code
-        if status_code >= 400:
-            flash(payload.get("error") or "不能重新分析。")
-        else:
-            flash("已重新分析。新任务已排队，原来的结果还在。")
-        return redirect(url_for("job_history"))
-
-    @app.post("/api/jobs/<job_id>/rerun")
-    @login_required
-    def rerun_job(job_id):
-        require_csrf()
-        row = owned_job(job_id)
-        try:
-            assemblers = json.loads(row["assemblers"])
-        except (TypeError, json.JSONDecodeError):
-            assemblers = None
-        if not isinstance(assemblers, list) or not assemblers:
-            return rerun_response({"error": "原来的参数不完整，不能重新分析。"}, 409)
-        if not inputs_ready(row):
-            return rerun_response({"error": "原来的测序文件已经不在，不能重新分析。"}, 409)
-
-        new_id = str(uuid.uuid4())
-        kept_sample_id = column_value(row, "sample_id")
-        kept_batch_id = column_value(row, "sequencing_batch_id")
-        job_dir = app.config["JOBS_ROOT"] / new_id
-        input_dir = job_dir / "input"
-        output_dir = job_dir / "output"
-        log_path = job_dir / "logs" / "job.log"
-        try:
-            threads = read_runtime_limits()["method_threads"]
-        except (OSError, RuntimeError, ValueError):
-            app.logger.exception("Could not read CPU allocation")
-            return rerun_response({"error": RESOURCE_START}, 503)
-        try:
-            for directory in (input_dir, job_dir / "work", output_dir, log_path.parent):
-                directory.mkdir(parents=True)
-            input_r1, input_r2 = copy_job_inputs(row, input_dir)
-            pair_log = app.config["TEMP_ROOT"] / "fastq-checks" / str(uuid.uuid4())
-            validate_read_pair_for_job(input_r1, input_r2, log_dir=pair_log)
-            for name in ("fastq_pair.log", "fastq_pair.json"):
-                source = pair_log / name
-                if source.is_file():
-                    relocate_file(source, log_path.parent / name)
-            log_path.write_text(
-                "MODULE: {}\nSTATUS: queued\nRERUN OF: {}\n".format(row["module_id"], row["id"]),
-                encoding="utf-8",
-            )
-            with connection() as db:
-                db.execute(
-                    "INSERT INTO jobs (id, owner, module_id, status, assemblers, threads, "
-                    "sample, spades_kmers, spades_careful, input_r1, input_r2, "
-                    "output_dir, log_path, rerun_of, sample_id, sequencing_batch_id) "
-                    "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        new_id,
-                        session["username"],
-                        row["module_id"],
-                        json.dumps(assemblers),
-                        threads,
-                        row["sample"],
-                        row["spades_kmers"],
-                        int(row["spades_careful"]),
-                        str(input_r1),
-                        str(input_r2),
-                        str(output_dir),
-                        str(log_path),
-                        row["id"],
-                        kept_sample_id,
-                        kept_batch_id,
-                    ),
-                )
-        except FileNotFoundError:
-            shutil.rmtree(job_dir, ignore_errors=True)
-            return rerun_response({"error": "原来的测序文件已经不在，不能重新分析。"}, 409)
-        except OSError:
-            shutil.rmtree(job_dir, ignore_errors=True)
-            app.logger.exception("Could not copy reads for a new analysis")
-            return rerun_response({"error": "新任务没有保存成功，请检查磁盘空间。"}, 507)
-        except sqlite3.Error:
-            shutil.rmtree(job_dir, ignore_errors=True)
-            raise
-        try:
-            from web.job_submit import submit_analysis_task
-
-            submit_analysis_task(
-                job_id=new_id,
-                owner=session["username"],
-                sample=row["sample"],
-                assemblers=assemblers,
-                threads=threads,
-                spades_kmers=row["spades_kmers"] or None,
-                spades_careful=bool(row["spades_careful"]),
-                input_r1=str(input_r1),
-                input_r2=str(input_r2),
-                output_dir=str(output_dir),
-                log_path=str(log_path),
-            )
-        except Exception:
-            app.logger.exception("Could not enqueue RQ pipeline for rerun %s", new_id)
-            return rerun_response(
-                {"error": "无法启动分析队列，请稍后重试。"},
-                503,
-            )
-        return rerun_response(
-            {"job": {"id": new_id, "status": "queued", "rerun_of": row["id"]}},
-            202,
-        )
+    hooks = SimpleNamespace(
+        connection=connection,
+        login_required=login_required,
+        require_csrf=require_csrf,
+        fail=fail,
+        storage_error=storage_error,
+        upload_value_error=upload_value_error,
+        csrf_token=csrf_token,
+        owned_job=owned_job,
+        job_detail=job_detail,
+        job_report_model=job_report_model,
+        load_owned_upload=load_owned_upload,
+        require_completed_upload=require_completed_upload,
+        upload_payload=upload_payload,
+        PATH_FIELDS=PATH_FIELDS,
+    )
+    register_blueprints(app, hooks)
 
     def notice_href(job_id: str | None) -> str:
         if job_id and "job_page" in app.view_functions:
