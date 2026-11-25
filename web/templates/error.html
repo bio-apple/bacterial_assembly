@@ -3,11 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% include "_head_meta.html" %}
   <title>请求没有完成 · 微生物 NGS 数据分析系统</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body class="workbench">
-  <main class="dashboard error-page">
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <main id="main-content" class="dashboard error-page">
     <p class="eyebrow">SERVER / LOG ONLY</p>
     <h1>这次请求没有完成</h1>
     <p>{{ message }}</p>

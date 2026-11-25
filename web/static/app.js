@@ -16,10 +16,18 @@
   const spadesOptions = document.querySelector("#spades-options");
   const assemblerOrderField = document.querySelector("#assembler-order");
   const selectionOrderLabel = document.querySelector("#selection-order");
-  let selected = null;
+  let selected = new URLSearchParams(window.location.search).get("job");
   let jobsById = new Map();
   let assemblerOrder = [];
   const labels = window.JOB_STATUS_LABELS;
+  const jobTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
   const logViewer = window.createLogViewer(log, {
     getJobId: () => selected,
   });
@@ -451,7 +459,14 @@
       }
       const time = document.createElement("span");
       time.className = "job-time";
-      time.textContent = `${job.threads} 线程 / 组装器 · ${(job.created_at || "").replace("T", " ").slice(0, 16)}`;
+      let createdLabel = "";
+      if (job.created_at) {
+        const created = new Date(job.created_at);
+        createdLabel = Number.isNaN(created.getTime())
+          ? ""
+          : ` · ${jobTimeFormatter.format(created)}`;
+      }
+      time.textContent = `${job.threads} 线程 / 组装器${createdLabel}`;
       bottom.append(tools, time);
       button.append(top, bottom);
       button.addEventListener("click", () => selectJob(job.id));
@@ -505,12 +520,26 @@
 
   function selectJob(jobId) {
     selected = jobId;
+    const url = new URL(window.location.href);
+    if (jobId) url.searchParams.set("job", jobId);
+    else url.searchParams.delete("job");
+    window.history.replaceState({}, "", url);
     logViewer.reset();
     const job = jobsById.get(jobId);
     if (job) renderDetail(job);
     refreshJobs();
     refreshLog();
   }
+
+  function uploadInFlight() {
+    return Object.values(lanes).some((lane) => lane.status === "uploading" || submitting);
+  }
+
+  window.addEventListener("beforeunload", (event) => {
+    if (!uploadInFlight()) return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
 
   function onFile(lane) {
     const file = lane.input.files[0];

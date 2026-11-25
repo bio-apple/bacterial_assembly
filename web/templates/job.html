@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% include "_head_meta.html" %}
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>{{ job.sample }} · 任务监控 · 微生物 NGS 数据分析系统</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
@@ -15,7 +16,7 @@
 <body class="workbench">
   {% include "_topbar.html" %}
   {% set state_labels = {"waiting": "等待", "running": "进行中", "done": "完成", "failed": "失败"} %}
-  <main class="dashboard monitor-page" id="job-monitor" data-job-id="{{ job.id }}">
+  <main id="main-content" class="dashboard monitor-page" data-job-monitor data-job-id="{{ job.id }}">
     <header class="monitor-intro">
       <div>
         <p class="eyebrow">LIVE TASK / {{ job.id[:8] }}</p>
@@ -33,6 +34,7 @@
       <a class="monitor-back" href="{{ url_for('dashboard') }}">返回工作台</a>
     </header>
 
+    <div class="monitor-live" aria-live="polite">
     <dl class="monitor-facts">
       <div>
         <dt>任务状态</dt>
@@ -55,6 +57,7 @@
         <dd><time id="stage-updated" datetime="{{ progress.updated_at or '' }}">{{ progress.updated_at or "—" }}</time></dd>
       </div>
     </dl>
+    </div>
     <dl class="record-grid phase-times" id="phase-times"{% if not job.started_at and not job.cancel_requested_at and not job.archived_at %} hidden{% endif %}>
       <div>
         <dt>开始执行</dt>
@@ -70,7 +73,7 @@
       </div>
     </dl>
     <p id="worker-beat" class="report-note"{% if job.status not in ("running", "cancelling") %} hidden{% endif %}>第 {{ job.attempt or 1 }} 次执行{% if job.heartbeat_at %} · 最近心跳 {{ job.heartbeat_at }}{% endif %}{% if job.process_group_id %} · 进程组 {{ job.process_group_id }}{% endif %}</p>
-    <p id="job-error" class="monitor-error"{% if not job.error %} hidden{% endif %}>{{ job.error or "" }}</p>
+    <p id="job-error" class="monitor-error" role="alert" aria-live="assertive"{% if not job.error %} hidden{% endif %}>{{ job.error or "" }}</p>
 
     <section class="monitor-block" aria-labelledby="sample-title">
       <div class="monitor-section-head">

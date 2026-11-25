@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% include "_head_meta.html" %}
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>总览 · 微生物 NGS 数据分析系统</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
@@ -11,7 +12,7 @@
 <body class="workbench">
   {% include "_topbar.html" %}
   {% from "components/status_pill.html" import status_pill %}
-  <main class="dashboard overview-page">
+  <main id="main-content" class="dashboard overview-page">
     <section class="overview-intro" aria-labelledby="overview-title">
       <div>
         <p class="eyebrow">WORKBENCH / THIS HOST</p>

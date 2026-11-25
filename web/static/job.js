@@ -1,5 +1,5 @@
 (() => {
-  const root = document.querySelector("#job-monitor");
+  const root = document.querySelector("[data-job-monitor]");
   if (!root) return;
 
   const jobId = root.dataset.jobId;
@@ -135,9 +135,9 @@
     const beat = document.querySelector("#worker-beat");
     if (phase && started && cancel && archived) {
       phase.hidden = !(job.started_at || job.cancel_requested_at || job.archived_at);
-      started.textContent = job.started_at || "尚未开始";
-      cancel.textContent = job.cancel_requested_at || "没有";
-      archived.textContent = job.archived_at || "尚未发布下载";
+      started.textContent = job.started_at ? formatTimestamp(job.started_at) : "尚未开始";
+      cancel.textContent = job.cancel_requested_at ? formatTimestamp(job.cancel_requested_at) : "没有";
+      archived.textContent = job.archived_at ? formatTimestamp(job.archived_at) : "尚未发布下载";
     }
     if (!beat) return;
     const live = job.status === "running" || job.status === "cancelling";
@@ -146,7 +146,7 @@
     const attempt = job.attempt || 1;
     const group = job.process_group_id ? ` · 进程组 ${job.process_group_id}` : "";
     beat.textContent = (job.heartbeat_at
-      ? `第 ${attempt} 次执行 · 最近心跳 ${job.heartbeat_at}`
+      ? `第 ${attempt} 次执行 · 最近心跳 ${formatTimestamp(job.heartbeat_at)}`
       : `第 ${attempt} 次执行`) + group;
   }
 

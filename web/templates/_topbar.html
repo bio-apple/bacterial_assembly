@@ -1,6 +1,7 @@
+<a class="skip-link" href="#main-content">跳到主要内容</a>
 <header class="topbar">
   <a class="brand" href="{{ url_for('overview') }}" aria-label="微生物 NGS 数据分析系统首页">
-    <span class="brand-icon">MN<i></i></span>
+    <span class="brand-icon" aria-hidden="true">MN<i></i></span>
     <span>MICROBIAL <b>NGS</b></span>
   </a>
   <nav class="site-nav" aria-label="主要导航">
@@ -21,8 +22,8 @@
     <div class="notice-slip" data-notice-root>
       <button type="button" class="notice-slip-toggle" aria-expanded="false" aria-controls="lab-notice-sheet" aria-label="实验室通知">
         <span class="notice-slip-kicker">实验室通知</span>
-        <span class="notice-slip-line" data-notice-line>暂无任务动态</span>
-        <span class="notice-slip-count" data-notice-count hidden></span>
+        <span class="notice-slip-line" data-notice-line aria-live="polite">暂无任务动态</span>
+        <span class="notice-slip-count" data-notice-count aria-live="polite" hidden></span>
         <i class="notice-dot" data-notice-dot hidden></i>
       </button>
       <div id="lab-notice-sheet" class="notice-sheet" role="region" aria-label="通知列表" tabindex="-1" hidden>

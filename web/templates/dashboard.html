@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% include "_head_meta.html" %}
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>细菌基因组组装 · 微生物 NGS 数据分析系统</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
@@ -14,7 +15,7 @@
 <body class="workbench">
   {% include "_topbar.html" %}
 
-  <main class="dashboard">
+  <main id="main-content" class="dashboard">
     <section class="page-intro" aria-labelledby="page-title">
       <div class="intro-text">
         <p class="eyebrow">ANALYSIS MODULES</p>
@@ -77,7 +78,7 @@
           <div class="field-row">
             <label class="field">
               <span>样本</span>
-              <input name="sample" list="known-samples" value="isolate_01" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" required>
+              <input name="sample" list="known-samples" value="isolate_01" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" autocomplete="off" spellcheck="false" required>
               <small>生物材料名称。同名样本会沿用，这次上传记为新的测序数据。</small>
             </label>
             <datalist id="known-samples">
@@ -101,7 +102,7 @@
           </fieldset>
           <div id="spades-options" class="spades-options" hidden>
             <label class="field"><span>SPAdes k-mer <small>可选，例如 21,33,55</small></span>
-              <input name="spades_kmers" placeholder="使用默认值">
+              <input name="spades_kmers" placeholder="例如 21,33,55…" autocomplete="off" spellcheck="false">
             </label>
             <label class="toggle-option"><input name="spades_careful" type="checkbox"><span>SPAdes careful 模式</span></label>
           </div>
@@ -109,7 +110,7 @@
             <p>任务按提交顺序运行 · 结果仅当前账号可见</p>
             <button class="button button-primary" id="start-button" type="submit" disabled>运行组装 <span>→</span></button>
           </div>
-          <p id="form-message" class="form-message" role="status"></p>
+          <p id="form-message" class="form-message" role="status" aria-live="polite"></p>
         </form>
       </section>
 

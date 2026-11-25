@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% include "_head_meta.html" %}
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>处理历史 · 微生物 NGS 数据分析系统</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
@@ -12,7 +13,7 @@
 <body class="workbench">
   {% include "_topbar.html" %}
   {% from "components/status_pill.html" import status_pill %}
-  <main class="dashboard history-page">
+  <main id="main-content" class="dashboard history-page">
     <section class="history-intro" aria-labelledby="history-title">
       <div>
         <p class="eyebrow">TASK BENCH / USER SCOPE</p>
@@ -51,10 +52,10 @@
         </select>
       </label>
       <label>开始日期
-        <input type="date" name="start" value="{{ filters.start }}">
+        <input type="date" name="start" value="{{ filters.start }}" autocomplete="off">
       </label>
       <label>结束日期
-        <input type="date" name="end" value="{{ filters.end }}">
+        <input type="date" name="end" value="{{ filters.end }}" autocomplete="off">
       </label>
       <div class="history-filter-actions">
         <button class="button button-primary" type="submit">筛选</button>

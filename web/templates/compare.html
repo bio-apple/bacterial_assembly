@@ -3,13 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% include "_head_meta.html" %}
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>运行比较 · 微生物 NGS 数据分析系统</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body class="workbench">
   {% include "_topbar.html" %}
-  <main class="dashboard compare-page">
+  <main id="main-content" class="dashboard compare-page">
     <header class="compare-heading">
       <div>
         <p class="eyebrow">TWO RUNS / NO AVERAGE</p>

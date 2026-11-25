@@ -19,15 +19,46 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; color: var(--ink); background: var(--paper); font-family: var(--sans); }
-button, input, select { font: inherit; }
-button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
+button, input, select, a, label, summary {
+  font: inherit;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: rgba(8, 124, 112, 0.18);
+}
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, .skip-link:focus-visible {
   outline: 3px solid #d18a52;
   outline-offset: 3px;
 }
-
+@media (pointer: fine) {
+  html { overscroll-behavior: none; }
+}
+.skip-link {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  z-index: 1000;
+  padding: 8px 12px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 650;
+  transform: translateY(-120%);
+}
+.skip-link:focus, .skip-link:focus-visible {
+  transform: translateY(0);
+}
+h1, h2, h3 {
+  text-wrap: balance;
+  scroll-margin-top: 88px;
+}
 .topbar {
   min-height: 66px;
-  padding: 0 clamp(20px, 5vw, 76px);
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: 0;
+  padding-left: max(clamp(20px, 5vw, 76px), env(safe-area-inset-left));
+  padding-right: max(clamp(20px, 5vw, 76px), env(safe-area-inset-right));
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1095,6 +1126,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 6px;
+  overscroll-behavior: contain;
 }
 .confirm-dialog::backdrop { background: rgba(25, 52, 56, .28); }
 .confirm-dialog h2 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -.04em; }
