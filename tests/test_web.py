@@ -609,9 +609,12 @@ class WebWorkbenchTests(unittest.TestCase):
         with patch("run_pipeline.run_script", side_effect=fake_run_script), patch(
             "run_pipeline.run_contig_filter"
         ), patch("run_pipeline.run_summary"), patch(
-            "run_pipeline.memory_share_gib", return_value=1
-        ), patch(
-            "run_pipeline.logical_cpu_count", return_value=2
+            "run_pipeline.read_runtime_limits",
+            return_value={
+                "method_threads": 1,
+                "method_memory_gib": 1,
+                "allocation_message": "threads=1 memory=1GiB",
+            },
         ), patch("sys.argv", argv):
             self.assertEqual(run_pipeline.main(), 3)
 
@@ -1363,7 +1366,10 @@ class WebWorkbenchTests(unittest.TestCase):
 
     def test_unreadable_cpu_returns_resource_message(self):
         token = self.login(self.client)
-        with patch("web.app.cpu_share", side_effect=RuntimeError("could not read cpu")):
+        with patch(
+            "web.app.read_runtime_limits",
+            side_effect=RuntimeError("could not read cpu"),
+        ):
             response = self.submit_job(self.client, token, ("spades",))
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json["code"], "resource_unavailable")
@@ -1961,6 +1967,9 @@ class WebWorkbenchTests(unittest.TestCase):
                 ),
             )
             db.commit()
+        from web.worker import persist_job_steps
+
+        persist_job_steps(self.app.config["DATABASE"], job_id)
 
         detail = self.client.get("/api/jobs/{}".format(job_id)).json["job"]["detail"]
         comparison_detail = detail["comparison"]

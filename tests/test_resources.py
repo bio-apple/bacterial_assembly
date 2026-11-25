@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.common import assigned_threads, cpu_share, memory_share_gib, physical_memory_bytes
+from scripts.resource_budget import read_runtime_limits
 from scripts.resource_limits import (
     allocation_log,
     combine_cpu,
@@ -119,6 +120,14 @@ class ResourceShareTests(unittest.TestCase):
     def test_assigned_threads_reads_pipeline_quota(self):
         with patch.dict("os.environ", {"_ASSEMBLY_ASSIGNED_THREADS": "7"}):
             self.assertEqual(assigned_threads(), 7)
+
+    def test_runtime_budget_matches_cpu_share_on_host(self):
+        budget = read_runtime_limits()
+        self.assertGreaterEqual(budget["method_threads"], 1)
+        self.assertGreaterEqual(budget["method_memory_gib"], 1)
+        self.assertEqual(budget["method_threads"], cpu_share(budget["cpu_limit"]))
+        self.assertIn("allocation_message", budget)
+        self.assertTrue(budget["allocation_message"])
 
     def test_assembler_scripts_prefer_assigned_threads(self):
         root = Path(__file__).resolve().parents[1]

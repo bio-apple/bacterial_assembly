@@ -11,18 +11,15 @@ import threading
 import uuid
 from pathlib import Path
 
+from scripts.assembly_outcome import write_outcome
 from scripts.common import (
     append_log,
-    cpu_share,
-    logical_cpu_count,
-    memory_share_gib,
-    physical_memory_bytes,
     prepare_output_dir,
     report_script_error,
     validate_reads,
     validate_sample,
 )
-from scripts.resource_limits import allocation_log, combine_cpu, combine_memory, read_cgroup
+from scripts.resource_budget import read_runtime_limits
 from scripts.run_spades import parse_kmers
 from scripts.stage_record import QUAST_EVALUATIONS, StageRecord, quast_stage_id
 
@@ -326,31 +323,6 @@ def run_assembler(
     return assembler, True
 
 
-OUTCOME_SCHEMA_VERSION = 1
-
-
-def write_outcome(
-    outdir: Path,
-    status: str,
-    selected: list[str],
-    successful: list[str],
-    failed: list[str],
-    exit_code: int,
-) -> None:
-    payload = {
-        "schema_version": OUTCOME_SCHEMA_VERSION,
-        "status": status,
-        "selected_assemblers": list(selected),
-        "successful_assemblers": list(successful),
-        "failed_assemblers": list(failed),
-        "exit_code": exit_code,
-    }
-    destination = outdir / "assembly_outcome.json"
-    temporary = outdir / ".assembly_outcome.json.tmp"
-    temporary.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
-    temporary.replace(destination)
-
-
 def merge_method_versions(
     assemblers: list[str], log_dir: Path, versions_path: Path
 ) -> None:
@@ -368,27 +340,12 @@ def main() -> int:
         parser.error("each assembler may be selected only once")
     if (args.spades_kmers or args.spades_careful) and "spades" not in args.assembler:
         parser.error("--spades-kmers and --spades-careful require --assembler spades")
-    cpu_count = logical_cpu_count()
     try:
-        detected = read_cgroup(
-            Path("/proc/self/cgroup").read_text(encoding="utf-8", errors="replace"),
-            Path("/sys/fs/cgroup"),
-        )
-    except OSError:
-        detected = {"quota_cpus": None, "cpuset_cpus": None, "memory_bytes": None, "generation": None}
-    cpu_limit, cpu_source = combine_cpu(cpu_count, detected["quota_cpus"], detected["cpuset_cpus"])
-    if detected["generation"] and cpu_source == "cgroup":
-        cpu_source = detected["generation"]
-    method_threads = cpu_share(cpu_limit)
-    try:
-        memory_limit, memory_source = combine_memory(
-            physical_memory_bytes(), detected["memory_bytes"]
-        )
-        if detected["generation"] and memory_source == "cgroup":
-            memory_source = detected["generation"]
-        method_memory_gib = memory_share_gib(memory_limit)
+        budget = read_runtime_limits()
     except RuntimeError as error:
         parser.error(str(error))
+    method_threads = budget["method_threads"]
+    method_memory_gib = budget["method_memory_gib"]
     try:
         validate_reads(args.r1, args.r2)
         validate_sample(args.sample)
@@ -424,15 +381,7 @@ def main() -> int:
             args.r1,
             args.r2,
             outdir,
-            allocation_log(
-                cpu_count,
-                cpu_limit,
-                cpu_source,
-                memory_limit,
-                memory_source,
-                method_threads,
-                method_memory_gib,
-            ),
+            budget["allocation_message"],
         ),
     )
 

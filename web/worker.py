@@ -18,11 +18,14 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from scripts.assembly_outcome import finished_status
 from scripts.stage_record import load_stage_record
-from web.steps import sync_job_steps
-from web.app import append_job_log, contained_path, create_app
+from web.app import create_app
 from web.errors import WORKER_INTERRUPTED, explain_job_failure
+from web.job_paths import load_job_stage_record
 from web.notices import note_disk, note_job, volume_is_low
+from web.steps import sync_job_steps
+from web.storage_paths import append_job_log, contained_path
 
 
 @contextmanager
@@ -525,17 +528,7 @@ def _persist_job_steps(database: Path, job_id: str) -> None:
         return
     if not isinstance(assemblers, list):
         return
-    output = Path(row["output_dir"])
-    record = {"stages": []}
-    for candidate in (
-        output.parent / "work" / "stages.json",
-        output / "stages.json",
-        output / "outputs" / "stages.json",
-    ):
-        loaded = load_stage_record(candidate)
-        if loaded.get("stages"):
-            record = loaded
-            break
+    record = load_job_stage_record(Path(row["output_dir"]))
     with connect(database) as db:
         sync_job_steps(db, job_id, assemblers, record, row["status"])
 
@@ -716,70 +709,6 @@ def build_pipeline_command(
     if "spades" in assemblers and spades_careful:
         command.append("--spades-careful")
     return command
-
-
-ASSEMBLER_OUTPUTS = {
-    "spades": "contigs.fasta",
-    "unicycler": "assembly.fasta",
-    "shovill": "contigs.fa",
-    "megahit": "final.contigs.fa",
-}
-
-
-def read_outcome(pipeline_output_dir: Path | None):
-    if pipeline_output_dir is None:
-        return None
-    path = pipeline_output_dir / "assembly_outcome.json"
-    try:
-        if not path.is_file() or path.is_symlink():
-            return None
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
-        return None
-    if payload.get("status") not in {"succeeded", "partial_success", "failed"}:
-        return None
-    if type(payload.get("exit_code")) is not int:
-        return None
-    for key in ("selected_assemblers", "successful_assemblers", "failed_assemblers"):
-        value = payload.get(key)
-        if not isinstance(value, list) or any(type(item) is not str or not item for item in value):
-            return None
-    return payload
-
-
-def assembler_output_present(pipeline_output_dir: Path, assembler: str) -> bool:
-    filename = ASSEMBLER_OUTPUTS.get(assembler)
-    if filename is None:
-        return False
-    path = pipeline_output_dir / "assemblies" / assembler / filename
-    try:
-        return path.is_file() and not path.is_symlink() and path.stat().st_size > 0
-    except OSError:
-        return False
-
-
-def finished_status(returncode, pipeline_output_dir: Path | None) -> str:
-    payload = read_outcome(pipeline_output_dir)
-    if payload is None or returncode != payload["exit_code"] or pipeline_output_dir is None:
-        return "failed"
-    selected = payload["selected_assemblers"]
-    successful = payload["successful_assemblers"]
-    failed = payload["failed_assemblers"]
-    if set(successful) & set(failed):
-        return "failed"
-    if not set(successful).issubset(selected) or not set(failed).issubset(selected):
-        return "failed"
-    if any(not assembler_output_present(pipeline_output_dir, name) for name in successful):
-        return "failed"
-    status = payload["status"]
-    exit_code = payload["exit_code"]
-    if status == "succeeded" and exit_code == 0 and successful == selected and not failed:
-        return "succeeded"
-    if status == "partial_success" and exit_code == 3 and successful and failed:
-        return "partial_success"
-    return "failed"
 
 
 def failure_message(returncode, error, log_path, pipeline_output_dir, partial: bool) -> str:

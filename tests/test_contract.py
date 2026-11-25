@@ -11,10 +11,11 @@ from pathlib import Path
 
 os.environ["ASSEMBLY_WEB_AUTOCREATE"] = "0"
 
-from run_pipeline import build_parser, write_outcome
+from run_pipeline import build_parser
+from scripts.assembly_outcome import finished_status, write_outcome
 from web.app import ensure_partial_success_status
 from web.fastq_check import check_read_pair, gzip_is_intact
-from web.worker import build_pipeline_command, finished_status
+from web.worker import build_pipeline_command
 
 
 ROOT = Path(__file__).resolve().parents[1]
