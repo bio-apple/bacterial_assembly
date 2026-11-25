@@ -326,11 +326,29 @@ def run_assembler(
     return assembler, True
 
 
-def write_outcome(outdir: Path, status: str) -> None:
-    (outdir / "assembly_outcome.json").write_text(
-        json.dumps({"status": status}, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+OUTCOME_SCHEMA_VERSION = 1
+
+
+def write_outcome(
+    outdir: Path,
+    status: str,
+    selected: list[str],
+    successful: list[str],
+    failed: list[str],
+    exit_code: int,
+) -> None:
+    payload = {
+        "schema_version": OUTCOME_SCHEMA_VERSION,
+        "status": status,
+        "selected_assemblers": list(selected),
+        "successful_assemblers": list(successful),
+        "failed_assemblers": list(failed),
+        "exit_code": exit_code,
+    }
+    destination = outdir / "assembly_outcome.json"
+    temporary = outdir / ".assembly_outcome.json.tmp"
+    temporary.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+    temporary.replace(destination)
 
 
 def merge_method_versions(
@@ -420,7 +438,9 @@ def main() -> int:
 
     filtered_r1 = outdir / "fastp" / "{}_R1.fastq.gz".format(args.sample)
     filtered_r2 = outdir / "fastp" / "{}_R2.fastq.gz".format(args.sample)
-    stages = StageRecord(outdir / "stages.json", list(args.assembler))
+    selected = list(args.assembler)
+    outcomes = {}
+    stages = StageRecord(outdir / "stages.json", selected)
     try:
         stages.start("fastp")
         run_script(
@@ -443,8 +463,7 @@ def main() -> int:
 
         log_dir = outdir / "logs"
         log_lock = threading.Lock()
-        outcomes = {}
-        for assembler in args.assembler:
+        for assembler in selected:
             name, succeeded = run_assembler(
                 assembler,
                 outdir,
@@ -459,12 +478,10 @@ def main() -> int:
             )
             outcomes[name] = succeeded
 
-        merge_method_versions(args.assembler, log_dir, versions_path)
-        successful = [
-            assembler for assembler in args.assembler if outcomes.get(assembler)
-        ]
+        merge_method_versions(selected, log_dir, versions_path)
+        successful = [assembler for assembler in selected if outcomes.get(assembler)]
         failed = [
-            assembler for assembler in args.assembler if not outcomes.get(assembler)
+            assembler for assembler in selected if assembler in outcomes and not outcomes[assembler]
         ]
         if successful:
             stages.start("comparison")
@@ -478,12 +495,12 @@ def main() -> int:
                 exit_code=0,
             )
         if not successful:
-            outcome = "failed"
+            outcome, exit_code = "failed", 1
         elif failed:
-            outcome = "partial_success"
+            outcome, exit_code = "partial_success", 3
         else:
-            outcome = "succeeded"
-        write_outcome(outdir, outcome)
+            outcome, exit_code = "succeeded", 0
+        write_outcome(outdir, outcome, selected, successful, failed, exit_code)
         if failed:
             report_script_error(
                 RuntimeError(
@@ -491,11 +508,22 @@ def main() -> int:
                 ),
                 log_path,
             )
-            return 1 if outcome == "failed" else 3
+            return exit_code
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
         stages.fail_running(str(error))
         try:
-            write_outcome(outdir, "failed")
+            write_outcome(
+                outdir,
+                "failed",
+                selected,
+                [assembler for assembler in selected if outcomes.get(assembler)],
+                [
+                    assembler
+                    for assembler in selected
+                    if assembler in outcomes and not outcomes[assembler]
+                ],
+                1,
+            )
         except OSError:
             pass
         return report_script_error(error, log_path)

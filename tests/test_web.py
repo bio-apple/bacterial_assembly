@@ -58,13 +58,24 @@ class WebWorkbenchTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.pipeline = self.root / "fake_pipeline.py"
         self.pipeline.write_text(
-            "import pathlib, sys\n"
+            "import json, pathlib, sys\n"
             "args = sys.argv\n"
             "if '--threads' in args or '--memory' in args: raise SystemExit('manual resource setting passed')\n"
             "out = pathlib.Path(args[args.index('--outdir') + 1])\n"
             "if any(out.iterdir()): raise SystemExit('output directory must be empty')\n"
+            "assemblers = args[args.index('--assembler'):][1::2]\n"
             "(out / 'assembled.txt').write_text('complete')\n"
-            "(out / 'assemblers.txt').write_text(','.join(args[args.index('--assembler'):][1::2]))\n"
+            "(out / 'assemblers.txt').write_text(','.join(assemblers))\n"
+            "names = {'spades': 'contigs.fasta', 'unicycler': 'assembly.fasta', "
+            "'shovill': 'contigs.fa', 'megahit': 'final.contigs.fa'}\n"
+            "for name in assemblers:\n"
+            "    folder = out / 'assemblies' / name\n"
+            "    folder.mkdir(parents=True)\n"
+            "    (folder / names[name]).write_text('>contig\\nACGT\\n')\n"
+            "(out / 'assembly_outcome.json').write_text(json.dumps({\n"
+            "    'schema_version': 1, 'status': 'succeeded', 'selected_assemblers': assemblers,\n"
+            "    'successful_assemblers': assemblers, 'failed_assemblers': [], 'exit_code': 0,\n"
+            "}) + '\\n')\n"
             "print('mock analysis complete', flush=True)\n",
             encoding="utf-8",
         )
@@ -615,6 +626,14 @@ class WebWorkbenchTests(unittest.TestCase):
         self.assertEqual(by_id["megahit:quast:original"]["state"], "waiting")
         self.assertTrue(all(stage["percent"] is None for stage in record["stages"]))
         self.assertEqual(by_id["comparison"]["state"], "done")
+        outcome = json.loads((outdir / "assembly_outcome.json").read_text(encoding="utf-8"))
+        self.assertEqual(outcome["schema_version"], 1)
+        self.assertEqual(outcome["status"], "partial_success")
+        self.assertEqual(outcome["selected_assemblers"], ["shovill", "megahit"])
+        self.assertEqual(outcome["successful_assemblers"], ["shovill"])
+        self.assertEqual(outcome["failed_assemblers"], ["megahit"])
+        self.assertEqual(outcome["exit_code"], 3)
+        self.assertFalse((outdir / ".assembly_outcome.json.tmp").exists())
 
     def test_configured_accounts_are_required(self):
         users_file = self.root / "users.json"
@@ -2199,13 +2218,23 @@ class WebWorkbenchTests(unittest.TestCase):
 
     def test_worker_runs_a_command_the_cli_parser_accepts(self):
         self.pipeline.write_text(
-            "import pathlib, sys\n"
+            "import json, pathlib, sys\n"
             "args = sys.argv\n"
             "out = pathlib.Path(args[args.index('--outdir') + 1])\n"
             "out.mkdir(parents=True, exist_ok=True)\n"
             "job_id = args[args.index('--job-id') + 1]\n"
             "(out / 'seen-job.txt').write_text(job_id)\n"
-            "(out / 'comparison.tsv').write_text('Assembler\\tN50\\nspades\\t1\\n')\n",
+            "(out / 'comparison.tsv').write_text('Assembler\\tN50\\nspades\\t1\\n')\n"
+            "for name, filename in (('spades', 'contigs.fasta'), ('megahit', 'final.contigs.fa')):\n"
+            "    folder = out / 'assemblies' / name\n"
+            "    folder.mkdir(parents=True)\n"
+            "    (folder / filename).write_text('>contig\\nACGT\\n')\n"
+            "(out / 'assembly_outcome.json').write_text(json.dumps({\n"
+            "    'schema_version': 1, 'status': 'succeeded',\n"
+            "    'selected_assemblers': ['spades', 'megahit'],\n"
+            "    'successful_assemblers': ['spades', 'megahit'],\n"
+            "    'failed_assemblers': [], 'exit_code': 0,\n"
+            "}) + '\\n')\n",
             encoding="utf-8",
         )
         token = self.login(self.client)
@@ -2225,7 +2254,15 @@ class WebWorkbenchTests(unittest.TestCase):
             "out = pathlib.Path(sys.argv[sys.argv.index('--outdir') + 1])\n"
             "out.mkdir(parents=True, exist_ok=True)\n"
             "(out / 'comparison.tsv').write_text('ok\\n')\n"
-            "(out / 'assembly_outcome.json').write_text(json.dumps({'status': 'partial_success'}))\n"
+            "folder = out / 'assemblies' / 'spades'\n"
+            "folder.mkdir(parents=True)\n"
+            "(folder / 'contigs.fasta').write_text('>contig\\nACGT\\n')\n"
+            "(out / 'assembly_outcome.json').write_text(json.dumps({\n"
+            "    'schema_version': 1, 'status': 'partial_success',\n"
+            "    'selected_assemblers': ['spades', 'megahit'],\n"
+            "    'successful_assemblers': ['spades'], 'failed_assemblers': ['megahit'],\n"
+            "    'exit_code': 3,\n"
+            "}) + '\\n')\n"
             "raise SystemExit(3)\n",
             encoding="utf-8",
         )
@@ -2243,7 +2280,12 @@ class WebWorkbenchTests(unittest.TestCase):
             "import json, pathlib, sys\n"
             "out = pathlib.Path(sys.argv[sys.argv.index('--outdir') + 1])\n"
             "out.mkdir(parents=True, exist_ok=True)\n"
-            "(out / 'assembly_outcome.json').write_text(json.dumps({'status': 'failed'}))\n"
+            "(out / 'assembly_outcome.json').write_text(json.dumps({\n"
+            "    'schema_version': 1, 'status': 'failed',\n"
+            "    'selected_assemblers': ['spades'],\n"
+            "    'successful_assemblers': [], 'failed_assemblers': ['spades'],\n"
+            "    'exit_code': 1,\n"
+            "}) + '\\n')\n"
             "raise SystemExit(1)\n",
             encoding="utf-8",
         )
@@ -2294,6 +2336,20 @@ class WebWorkbenchTests(unittest.TestCase):
         self.assertIn("数量不一致", rejected.json["error"])
         self.assertFalse(any(self.app.config["JOBS_ROOT"].rglob("job.log")))
         self.assertTrue(any(self.app.config["TEMP_ROOT"].rglob("fastq_pair.json")))
+
+    def test_comparison_file_alone_does_not_mark_success(self):
+        self.pipeline.write_text(
+            "import pathlib, sys\n"
+            "out = pathlib.Path(sys.argv[sys.argv.index('--outdir') + 1])\n"
+            "out.mkdir(parents=True, exist_ok=True)\n"
+            "(out / 'comparison.tsv').write_text('Assembler\\tN50\\nspades\\t1\\n')\n",
+            encoding="utf-8",
+        )
+        token = self.login(self.client)
+        job_id = self.submit_job(self.client, token, ("spades",)).json["job"]["id"]
+        self.assertTrue(process_next_job(self.app))
+        job = self.client.get("/api/jobs/{}".format(job_id)).json["job"]
+        self.assertEqual(job["status"], "failed")
 
 
 if __name__ == "__main__":

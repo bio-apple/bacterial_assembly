@@ -718,25 +718,67 @@ def build_pipeline_command(
     return command
 
 
+ASSEMBLER_OUTPUTS = {
+    "spades": "contigs.fasta",
+    "unicycler": "assembly.fasta",
+    "shovill": "contigs.fa",
+    "megahit": "final.contigs.fa",
+}
+
+
+def read_outcome(pipeline_output_dir: Path | None):
+    if pipeline_output_dir is None:
+        return None
+    path = pipeline_output_dir / "assembly_outcome.json"
+    try:
+        if not path.is_file() or path.is_symlink():
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        return None
+    if payload.get("status") not in {"succeeded", "partial_success", "failed"}:
+        return None
+    if type(payload.get("exit_code")) is not int:
+        return None
+    for key in ("selected_assemblers", "successful_assemblers", "failed_assemblers"):
+        value = payload.get(key)
+        if not isinstance(value, list) or any(type(item) is not str or not item for item in value):
+            return None
+    return payload
+
+
+def assembler_output_present(pipeline_output_dir: Path, assembler: str) -> bool:
+    filename = ASSEMBLER_OUTPUTS.get(assembler)
+    if filename is None:
+        return False
+    path = pipeline_output_dir / "assemblies" / assembler / filename
+    try:
+        return path.is_file() and not path.is_symlink() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
 def finished_status(returncode, pipeline_output_dir: Path | None) -> str:
-    recorded = None
-    if pipeline_output_dir is not None:
-        path = pipeline_output_dir / "assembly_outcome.json"
-        try:
-            if path.is_file() and not path.is_symlink():
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(payload, dict):
-                    recorded = payload.get("status")
-        except (OSError, json.JSONDecodeError):
-            recorded = None
-    if recorded == "partial_success":
-        return "partial_success"
-    if recorded == "failed":
+    payload = read_outcome(pipeline_output_dir)
+    if payload is None or returncode != payload["exit_code"] or pipeline_output_dir is None:
         return "failed"
-    if recorded == "succeeded" and returncode == 0:
+    selected = payload["selected_assemblers"]
+    successful = payload["successful_assemblers"]
+    failed = payload["failed_assemblers"]
+    if set(successful) & set(failed):
+        return "failed"
+    if not set(successful).issubset(selected) or not set(failed).issubset(selected):
+        return "failed"
+    if any(not assembler_output_present(pipeline_output_dir, name) for name in successful):
+        return "failed"
+    status = payload["status"]
+    exit_code = payload["exit_code"]
+    if status == "succeeded" and exit_code == 0 and successful == selected and not failed:
         return "succeeded"
-    if returncode == 0:
-        return "succeeded"
+    if status == "partial_success" and exit_code == 3 and successful and failed:
+        return "partial_success"
     return "failed"
 
 
@@ -839,10 +881,9 @@ def process_next_job(app) -> bool:
             persist_job_steps(app.config["DATABASE"], job["id"])
             return True
 
-        partial_output_available = (
-            pipeline_output_dir / "comparison.tsv"
-        ).is_file()
-        if returncode and not partial_output_available:
+        verified = finished_status(returncode, pipeline_output_dir)
+        comparison_present = (pipeline_output_dir / "comparison.tsv").is_file()
+        if returncode and verified == "failed" and not comparison_present:
             raise RuntimeError("Pipeline exited with status {}".format(returncode))
 
         archived_dir = pipeline_output_dir
@@ -883,7 +924,11 @@ def process_next_job(app) -> bool:
                     None,
                     log_path,
                     pipeline_output_dir,
-                    final_status == "partial_success" or partial_output_available,
+                    final_status == "partial_success"
+                    or (
+                        final_status == "failed"
+                        and (archived_dir / "comparison.tsv").is_file()
+                    ),
                 )
             ),
         )

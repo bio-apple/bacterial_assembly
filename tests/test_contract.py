@@ -11,7 +11,7 @@ from pathlib import Path
 
 os.environ["ASSEMBLY_WEB_AUTOCREATE"] = "0"
 
-from run_pipeline import build_parser
+from run_pipeline import build_parser, write_outcome
 from web.app import ensure_partial_success_status
 from web.fastq_check import check_read_pair, gzip_is_intact
 from web.worker import build_pipeline_command, finished_status
@@ -67,22 +67,49 @@ class PipelineContractTests(unittest.TestCase):
         self.assertNotIn("unrecognized arguments", completed.stderr)
         self.assertIn("missing", completed.stderr.lower())
 
-    def test_finished_status_follows_the_outcome_file(self):
+    def test_outcome_file_is_replaced_atomically_and_checked_against_outputs(self):
         with tempfile.TemporaryDirectory() as temporary:
             outdir = Path(temporary)
-            (outdir / "assembly_outcome.json").write_text(
-                json.dumps({"status": "partial_success"}),
-                encoding="utf-8",
+            contig = outdir / "assemblies" / "spades" / "contigs.fasta"
+            contig.parent.mkdir(parents=True)
+            contig.write_text(">contig\nACGT\n", encoding="utf-8")
+            write_outcome(outdir, "succeeded", ["spades"], ["spades"], [], 0)
+            saved = json.loads((outdir / "assembly_outcome.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                saved,
+                {
+                    "schema_version": 1,
+                    "status": "succeeded",
+                    "selected_assemblers": ["spades"],
+                    "successful_assemblers": ["spades"],
+                    "failed_assemblers": [],
+                    "exit_code": 0,
+                },
+            )
+            self.assertFalse((outdir / ".assembly_outcome.json.tmp").exists())
+            self.assertEqual(finished_status(0, outdir), "succeeded")
+
+            (outdir / "comparison.tsv").write_text("Assembler\tN50\nspades\t1\n", encoding="utf-8")
+            (outdir / "assembly_outcome.json").unlink()
+            self.assertEqual(finished_status(0, outdir), "failed")
+
+            write_outcome(outdir, "succeeded", ["spades"], ["spades"], [], 0)
+            contig.unlink()
+            self.assertEqual(finished_status(0, outdir), "failed")
+            contig.write_text(">contig\nACGT\n", encoding="utf-8")
+
+            megahit = outdir / "assemblies" / "megahit" / "final.contigs.fa"
+            megahit.parent.mkdir(parents=True)
+            write_outcome(
+                outdir,
+                "partial_success",
+                ["spades", "megahit"],
+                ["spades"],
+                ["megahit"],
+                3,
             )
             self.assertEqual(finished_status(3, outdir), "partial_success")
-            (outdir / "assembly_outcome.json").write_text(
-                json.dumps({"status": "failed"}),
-                encoding="utf-8",
-            )
-            self.assertEqual(finished_status(1, outdir), "failed")
-            (outdir / "assembly_outcome.json").unlink()
-            self.assertEqual(finished_status(0, outdir), "succeeded")
-            self.assertEqual(finished_status(1, outdir), "failed")
+            self.assertEqual(finished_status(0, outdir), "failed")
 
     def test_pair_check_rejects_count_and_id_mismatches_and_broken_gzip(self):
         with tempfile.TemporaryDirectory() as temporary:
