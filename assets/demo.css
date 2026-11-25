@@ -8,19 +8,19 @@
   justify-content: space-between;
   gap: 0.5rem 1rem;
   padding: 0.55rem 1.25rem;
-  background: #123833;
-  color: #d7e8e4;
+  background: #1A2248;
+  color: #D6DBF0;
   font-family: "IBM Plex Mono", ui-monospace, monospace;
   font-size: 0.78rem;
   letter-spacing: 0.02em;
 }
 .demo-banner a {
-  color: #8fd6c8;
+  color: #A8B4E8;
   font-weight: 600;
   text-decoration: none;
 }
 .demo-banner a:hover { text-decoration: underline; }
-.demo-banner strong { font-weight: 600; color: #9fe8df; }
+.demo-banner strong { font-weight: 600; color: #C5CDF5; }
 
 /* Pages demos: stack banner above the workbench grid */
 body.workbench {
@@ -41,28 +41,27 @@ body.workbench .app-shell > .sidebar {
 body.workbench .app-shell > .topbar {
   grid-column: 2;
   grid-row: 1;
-  justify-content: flex-end;
 }
 body.workbench .app-shell > main {
   grid-column: 2;
   grid-row: 2;
-  width: min(1440px, calc(100% - 48px));
-  margin: 0 auto;
-  padding: 24px 0 48px;
+  min-width: 0;
 }
-body.login-page .demo-banner { position: relative; }
-
-@media (max-width: 960px) {
+@media (max-width: 900px) {
   body.workbench .app-shell {
     grid-template-columns: 1fr;
+    grid-template-rows: auto auto 1fr;
   }
   body.workbench .app-shell > .sidebar {
-    position: relative;
-    transform: none;
-    width: auto;
+    grid-column: 1;
+    grid-row: 1;
   }
-  body.workbench .app-shell > .topbar,
+  body.workbench .app-shell > .topbar {
+    grid-column: 1;
+    grid-row: 2;
+  }
   body.workbench .app-shell > main {
     grid-column: 1;
+    grid-row: 3;
   }
 }
