@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -9,6 +10,7 @@ if __package__:
     from .common import (
         add_output_arguments,
         add_read_arguments,
+        assigned_threads,
         cpu_share,
         memory_share_gib,
         prepare_output_dir,
@@ -22,6 +24,7 @@ else:
     from common import (
         add_output_arguments,
         add_read_arguments,
+        assigned_threads,
         cpu_share,
         memory_share_gib,
         prepare_output_dir,
@@ -49,7 +52,7 @@ def main() -> int:
     parser.add_argument("--kmers", type=parse_kmers)
     parser.add_argument("--careful", action="store_true")
     args = parser.parse_args()
-    threads = cpu_share()
+    threads = assigned_threads() if os.environ.get("_ASSEMBLY_ASSIGNED_THREADS") else cpu_share()
     memory_gib = memory_share_gib()
     outdir = Path(args.outdir)
     log_path, versions_path = reporting_paths(args, outdir)

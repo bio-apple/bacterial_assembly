@@ -20,6 +20,7 @@ services:
     working_dir: /opt/bacterial-assembly
     environment:
       ASSEMBLY_WEB_SECRET: ${ASSEMBLY_WEB_SECRET:?Set a unique random secret in deploy/.env}
+      ASSEMBLY_SESSION_COOKIE_SECURE: ${ASSEMBLY_SESSION_COOKIE_SECURE:-true}
       ASSEMBLY_USERS_FILE: /config/users.json
       ASSEMBLY_DATA_ROOT: /data
       TMPDIR: /data/temp
@@ -33,8 +34,10 @@ services:
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
     restart: unless-stopped
 
+  # Single worker only. container_name blocks a second replica; worker.lock is the runtime guard.
   worker:
     image: bacterial-assembly:latest
+    container_name: bacterial-assembly-worker
     entrypoint: ["micromamba", "run", "-n", "base"]
     command: ["python", "-m", "web.worker"]
     working_dir: /opt/bacterial-assembly
@@ -51,3 +54,5 @@ services:
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
     restart: unless-stopped
     init: true
+    deploy:
+      replicas: 1

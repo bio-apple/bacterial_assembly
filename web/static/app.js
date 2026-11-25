@@ -140,9 +140,9 @@
   const uploadLabels = {
     pending: "等待上传",
     uploading: "上传中",
-    checking: "正在核对",
     completed: "可分析",
-    interrupted: "传输中断",
+    failed: "上传失败",
+    consumed: "已使用",
   };
   const kmerMessage = "参数校验错误。SPAdes k-mer 必须是不超过 127 的奇数，并用逗号分隔。";
   const notReadyMessage = "两份 FASTQ 都通过字节校验和记录校验后，才能运行组装。";
@@ -193,7 +193,7 @@
     const percent = lane.status === "completed" ? 100 : lane.loadedPercent || 0;
     lane.root.classList.toggle("is-uploading", lane.status === "uploading");
     lane.root.classList.toggle("is-done", lane.status === "completed");
-    lane.root.classList.toggle("is-interrupted", lane.status === "interrupted");
+    lane.root.classList.toggle("is-failed", lane.status === "failed");
     lane.fill.style.width = `${percent}%`;
     lane.track.setAttribute("aria-valuenow", String(percent));
     lane.percent.textContent = `${percent}%`;
@@ -201,7 +201,7 @@
     lane.state.className = `transfer-state state-${lane.status}`;
     lane.name.textContent = lane.fileName || "尚未选择";
     lane.detail.textContent = lane.detailText;
-    lane.resume.hidden = lane.status !== "interrupted" || lane.checksumFailed;
+    lane.resume.hidden = lane.status !== "failed" || lane.checksumFailed;
   }
 
   function updateReady() {
@@ -373,7 +373,7 @@
         attemptBytes += bytes.length;
       }
       if (generation !== lane.generation) return;
-      lane.status = "checking";
+      lane.status = "uploading";
       lane.loadedPercent = 99;
       lane.detailText = "先核对 SHA-256，再检查 FASTQ 记录";
       renderLane(lane);
@@ -391,7 +391,7 @@
       updateReady();
     } catch (error) {
       if (generation !== lane.generation || error.aborted) return;
-      lane.status = "interrupted";
+      lane.status = "failed";
       lane.checksumFailed = Boolean(error.checksum || error.format);
       if (error.checksum || error.format) {
         sessionStorage.removeItem(storageKey(lane.role, file));

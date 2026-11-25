@@ -4,7 +4,7 @@
 
 将 `deploy/nginx.conf` 安装到 Nginx `conf.d`，替换证书路径与服务器名后重载。防火墙只开放 HTTPS；不要把应用的 8000 端口暴露到公网。
 
-登录使用安全、HttpOnly、SameSite=Lax 的 HTTPS cookie，并验证 CSRF。应用信任一跳 `X-Forwarded-*` 头；只应通过可信的本机反向代理访问 Gunicorn。
+登录使用 HttpOnly、SameSite=Lax 的会话 cookie，并验证 CSRF。`ASSEMBLY_SESSION_COOKIE_SECURE` 默认为 `true`（适合 HTTPS 反代）；浏览器若直连 `http://127.0.0.1:8000`，须在 `.env` 设为 `false`。应用信任一跳 `X-Forwarded-*` 头；生产环境只应通过可信的本机反向代理访问 Gunicorn。
 
 ## 账号
 

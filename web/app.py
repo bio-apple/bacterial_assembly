@@ -459,6 +459,18 @@ def append_job_log(log_path: str | Path, text: str) -> None:
         return
 
 
+def env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be a boolean value")
+
+
 def create_app(test_config: dict | None = None) -> Flask:
     app = Flask(__name__, template_folder="templates", static_folder="static")
     app.config.from_mapping(
@@ -468,7 +480,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         PIPELINE_PATH=Path(__file__).resolve().parents[1] / "run_pipeline.py",
         ANALYSIS_MODULES=ANALYSIS_MODULES,
         SESSION_COOKIE_HTTPONLY=True,
-        SESSION_COOKIE_SECURE=True,
+        SESSION_COOKIE_SECURE=env_flag("ASSEMBLY_SESSION_COOKIE_SECURE", True),
         SESSION_COOKIE_SAMESITE="Lax",
         PERMANENT_SESSION_LIFETIME=8 * 60 * 60,
         MAX_CONTENT_LENGTH=None,

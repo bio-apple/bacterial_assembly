@@ -15,7 +15,7 @@ cp users.json.example users.json
 chmod 600 .env users.json
 ```
 
-在 `.env` 中设置 `ASSEMBLY_WEB_SECRET`、`APP_UID`、`APP_GID`（密钥无默认值）。生成密码哈希：
+在 `.env` 中设置 `ASSEMBLY_WEB_SECRET`、`ASSEMBLY_SESSION_COOKIE_SECURE`、`APP_UID`、`APP_GID`（密钥无默认值）。经本机 Nginx HTTPS 反代访问时保持 `ASSEMBLY_SESSION_COOKIE_SECURE=true`；若浏览器直接访问 `http://127.0.0.1:8000`，改为 `false`，否则会话 Cookie 可能无法发送。生成密码哈希：
 
 ```bash
 docker compose build
@@ -38,8 +38,8 @@ Compose 将仓库只读挂载到 `/opt/bacterial-assembly`。Web 端口绑定 `1
 
 ```text
 data/
-  uploads/incoming/
   uploads/chunks/
+  uploads/incoming/
   uploads/validated/
   jobs/<任务编号>/input/
   jobs/<任务编号>/work/
@@ -51,15 +51,15 @@ data/
   archive/
 ```
 
-分析只读 `jobs/<任务编号>/input`。若数据根下仍有旧的 `jobs.sqlite3` 而 `database/jobs.sqlite3` 不存在，启动时会把旧库移过去，不删表。worker 使用数据根上的 `worker.lock`；不要横向扩容 worker。
+浏览器分片上传的未完成字节在 `uploads/chunks/`；multipart 直传建任务时的短暂暂存在 `uploads/incoming/`；校验通过、尚未绑定任务的文件在 `uploads/validated/`。分析只读 `jobs/<任务编号>/input`。若数据根下仍有旧的 `jobs.sqlite3` 而 `database/jobs.sqlite3` 不存在，启动时会把旧库移过去，不删表。Compose 将 worker 固定为单实例（`container_name` + `deploy.replicas: 1`），运行时另用数据根上的 `worker.lock`；不要 `docker compose up --scale worker=N`。
 
 ## 上传与校验
 
-浏览器按 8 MiB 分片上传 R1/R2：
+浏览器按 8 MiB 分片上传 R1/R2。上传库表状态为 `pending` / `uploading` / `completed` / `failed` / `consumed`（前端同一套枚举）：
 
 1. **字节校验**：SHA-256 与浏览器提交值一致  
-2. **记录校验**：`.gz` 完整 gzip 读取；ValidateFastq 0.1.1（退出码 0，且输出含 `no errors found`，不含 `Error found at readnumber`）→ 单文件可分析  
-3. **配对检查**：创建或重新分析前核对 R1/R2 数量与 read 编号  
+2. **记录校验**：`.gz` 完整 gzip 读取；ValidateFastq 0.1.1（退出码 0，且输出含 `no errors found`，不含 `Error found at readnumber`）→ 单文件可分析（`completed`）  
+3. **配对检查**：创建或重新分析前核对 R1/R2 数量与 read 编号；「可分析」不等于已配对  
 
 任一步失败都不能启动组装。
 

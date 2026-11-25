@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.common import cpu_share, memory_share_gib, physical_memory_bytes
+from scripts.common import assigned_threads, cpu_share, memory_share_gib, physical_memory_bytes
 from scripts.resource_limits import (
     allocation_log,
     combine_cpu,
@@ -115,6 +115,38 @@ class ResourceShareTests(unittest.TestCase):
         cpu, source = combine_cpu(5, None, None)
         self.assertEqual((cpu, source), (5, "host"))
         self.assertEqual(cpu_share(cpu), 4)
+
+    def test_assigned_threads_reads_pipeline_quota(self):
+        with patch.dict("os.environ", {"_ASSEMBLY_ASSIGNED_THREADS": "7"}):
+            self.assertEqual(assigned_threads(), 7)
+
+    def test_assembler_scripts_prefer_assigned_threads(self):
+        root = Path(__file__).resolve().parents[1]
+        for script in (
+            "run_spades.py",
+            "run_shovill.py",
+            "run_megahit.py",
+            "run_unicycler.py",
+        ):
+            with self.subTest(script=script):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        (
+                            "import ast, pathlib;"
+                            f" source = pathlib.Path('scripts/{script}').read_text(encoding='utf-8');"
+                            " tree = ast.parse(source);"
+                            " text = ast.dump(tree);"
+                            " assert 'assigned_threads' in text;"
+                            " assert '_ASSEMBLY_ASSIGNED_THREADS' in source"
+                        ),
+                    ],
+                    cwd=root,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

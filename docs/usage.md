@@ -64,7 +64,7 @@ CLI 非零表示未全部成功。Web 将部分成功记为 `partial_success`（
 
 总控先取主机逻辑 CPU（`os.cpu_count()`）和主机物理内存（`sysconf`），再读 cgroup v1/v2：CPU 取 quota 与 cpuset 中更紧的限制，内存取 `memory.max` / `memory.limit_in_bytes`（无限标记视为无限制）。有效上限是主机读数与 cgroup 限制的更小值；读不到 cgroup 时回退到主机读数。再对有效上限取 90%（CPU 至少 1 线程，内存至少 1 GiB），写入 `run.log`。
 
-不是「宿主机物理内存的 90%」单独决定。流水线中 fastp 使用上述线程数（`--thread`）；各组装方法按同一规则取线程与内存。独立运行 QUAST 且无总控分配线程时，使用 `os.cpu_count()`。独立运行 fastp 且无总控分配时，自行按 cgroup/主机规则取 90% CPU。
+不是「宿主机物理内存的 90%」单独决定。流水线把线程配额写入 `_ASSEMBLY_ASSIGNED_THREADS`；fastp 与各组装脚本读取该配额。独立运行 QUAST 且无总控分配线程时，使用 `os.cpu_count()`。独立运行 fastp 或组装脚本且无总控分配时，自行按 cgroup/主机规则取 90% CPU。内存仍由各脚本按同一规则自行探测（流水线暂不下发内存环境变量）。
 
 ## 独立脚本
 

@@ -281,7 +281,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .transfer-lane.is-uploading { border-color: #8ec9bc; }
 .transfer-lane.is-done { border-color: #8ec9bc; background: #f3faf7; }
 .transfer-lane.is-r2.is-done { border-color: #e3b2a4; background: #fdf8f6; }
-.transfer-lane.is-interrupted { border-color: #e3b2a4; background: #fdf7f5; }
+.transfer-lane.is-failed { border-color: #e3b2a4; background: #fdf7f5; }
 .transfer-body { min-width: 0; display: grid; gap: 6px; }
 .transfer-track {
   height: 10px;
@@ -304,9 +304,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .transfer-name { flex: 1; min-width: 0; overflow: hidden; color: var(--muted); font: 10px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .transfer-state { color: var(--faint); font: 10px var(--sans); white-space: nowrap; }
 .transfer-state.state-uploading { color: var(--teal); }
-.transfer-state.state-checking { color: var(--deep); }
 .transfer-state.state-completed { color: #376d48; }
-.transfer-state.state-interrupted { color: var(--coral); }
+.transfer-state.state-failed { color: var(--coral); }
 .transfer-percent { color: var(--ink); font: 12px var(--mono); font-variant-numeric: tabular-nums; }
 .transfer-lane.is-r2 .transfer-percent { color: var(--coral); }
 .transfer-lane:not(.is-r2) .transfer-percent { color: var(--teal); }

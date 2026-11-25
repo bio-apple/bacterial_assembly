@@ -414,6 +414,22 @@ class WebWorkbenchTests(unittest.TestCase):
                 }
             )
 
+    def test_session_cookie_secure_follows_environment(self):
+        base = {
+            "SECRET_KEY": "test-key-not-for-production-32bytes",
+            "USERS": {"alice": generate_password_hash("alice-password", method="scrypt")},
+            "PIPELINE_PATH": self.pipeline,
+        }
+        with patch.dict("os.environ", {"ASSEMBLY_SESSION_COOKIE_SECURE": "false"}):
+            insecure = create_app({**base, "DATA_ROOT": self.root / "insecure-cookie"})
+        self.assertFalse(insecure.config["SESSION_COOKIE_SECURE"])
+        with patch.dict("os.environ", {"ASSEMBLY_SESSION_COOKIE_SECURE": "true"}):
+            secure = create_app({**base, "DATA_ROOT": self.root / "secure-cookie"})
+        self.assertTrue(secure.config["SESSION_COOKIE_SECURE"])
+        with patch.dict("os.environ", {"ASSEMBLY_SESSION_COOKIE_SECURE": "maybe"}):
+            with self.assertRaisesRegex(RuntimeError, "ASSEMBLY_SESSION_COOKIE_SECURE"):
+                create_app({**base, "DATA_ROOT": self.root / "bad-cookie"})
+
     def test_existing_database_migrates_module_id(self):
         data_root = self.root / "legacy-data"
         data_root.mkdir()
