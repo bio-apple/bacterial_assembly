@@ -10,7 +10,6 @@ import socket
 import sqlite3
 import subprocess
 import sys
-import tarfile
 import time
 import traceback
 import uuid
@@ -22,6 +21,7 @@ from scripts.assembly_outcome import finished_status
 from web.app import create_app
 from web.errors import WORKER_INTERRUPTED, explain_job_failure
 from web.job_paths import load_job_stage_record
+from web.job_publish import archive_results_dir
 from web.notices import note_disk, note_job, volume_is_low
 from web.steps import sync_job_steps
 from web.storage_paths import append_job_log, contained_path
@@ -827,24 +827,14 @@ def process_next_job(app) -> bool:
         if publish:
             publish_directory(pipeline_output_dir, output_dir)
             archived_dir = output_dir
-        archive_path = contained_path(
-            data_root, app.config["ARCHIVE_ROOT"] / "{}.tar.gz".format(job_id)
+        archive_dir = contained_path(data_root, app.config["ARCHIVE_ROOT"])
+        unfinished_archive = archive_dir / "{}.tar.gz.partial".format(job_id)
+        written = archive_results_dir(
+            job_id, archived_dir, Path(data_root), archive_dir=archive_dir
         )
-        archive_path.parent.mkdir(parents=True, exist_ok=True)
-        partial_archive = archive_path.with_name(archive_path.name + ".partial")
-        unfinished_archive = partial_archive
-        partial_archive.unlink(missing_ok=True)
-        with tarfile.open(partial_archive, "w:gz") as archive:
-            archive.add(
-                archived_dir,
-                arcname="results",
-                recursive=True,
-                filter=lambda member: None if member.issym() else member,
-            )
-        if not partial_archive.is_file() or partial_archive.stat().st_size < 1:
-            partial_archive.unlink(missing_ok=True)
+        if written is None:
             raise RuntimeError("archive was not written")
-        partial_archive.replace(archive_path)
+        archive_path = written
         unfinished_archive = None
         final_status = finished_status(returncode, archived_dir)
         published = update_job(

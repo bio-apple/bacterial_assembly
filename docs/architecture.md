@@ -51,7 +51,7 @@ CLI 仍可用仓库根目录 `run_pipeline.py` 在本机一次性跑通同一科
 | quast | qc | 同一工作项内三次 `run_quast.py` |
 | summary | qc | `summarize_quast.py` + `assembly_outcome.json` |
 
-编排与入队：`web/orchestrator.py`。执行：`web/step_runners.py`。RQ 入口：`web/rq_jobs.py`。
+编排与入队：`web/orchestrator.py`。Web 创建/重新分析共用：`web/job_submit.enqueue_rq_pipeline`。执行：`web/step_runners.py`。RQ 入口：`web/rq_jobs.py`。归档：`web/job_publish.py`。
 
 Redis 消息只带 `step_id` 等调度元数据；路径与参数以 PostgreSQL 与磁盘为准。
 

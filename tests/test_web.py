@@ -2324,7 +2324,10 @@ class WebWorkbenchTests(unittest.TestCase):
     def test_interrupted_archive_is_not_published(self):
         token = self.login(self.client)
         job_id = self.submit_job(self.client, token, ("spades",)).json["job"]["id"]
-        with patch("web.worker.tarfile.open", side_effect=OSError("archive interrupted")):
+        with patch(
+            "web.worker.archive_results_dir",
+            side_effect=OSError("archive interrupted"),
+        ):
             self.assertTrue(process_next_job(self.app))
         job = self.client.get("/api/jobs/{}".format(job_id)).json["job"]
         self.assertEqual(job["status"], "failed")
@@ -2335,7 +2338,10 @@ class WebWorkbenchTests(unittest.TestCase):
     def test_archive_disk_full_reports_disk_and_does_not_publish(self):
         token = self.login(self.client)
         job_id = self.submit_job(self.client, token, ("spades",)).json["job"]["id"]
-        with patch("web.worker.tarfile.open", side_effect=OSError(errno.ENOSPC, "nospace")):
+        with patch(
+            "web.worker.archive_results_dir",
+            side_effect=OSError(errno.ENOSPC, "nospace"),
+        ):
             self.assertTrue(process_next_job(self.app))
         job = self.client.get("/api/jobs/{}".format(job_id)).json["job"]
         self.assertEqual(job["status"], "failed")

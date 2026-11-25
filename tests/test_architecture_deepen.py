@@ -123,5 +123,76 @@ class ResourceEnvTests(unittest.TestCase):
                 self.assertEqual(job["_memory_gib"], 7)
 
 
+class JobSubmitTests(unittest.TestCase):
+    def test_enqueue_skipped_without_rq(self):
+        from web import job_submit
+
+        with mock.patch.object(job_submit, "use_rq_pipeline", return_value=False):
+            with mock.patch.object(job_submit, "plan_and_insert_job") as plan:
+                used = job_submit.enqueue_rq_pipeline(
+                    job_id="j1",
+                    owner="u",
+                    sample="s",
+                    assemblers=["spades"],
+                    threads=2,
+                    spades_kmers=None,
+                    spades_careful=False,
+                    input_r1="//r1",
+                    input_r2="//r2",
+                    output_dir="/out",
+                    log_path="/log",
+                )
+        self.assertFalse(used)
+        plan.assert_not_called()
+
+    def test_enqueue_plans_and_starts(self):
+        from web import job_submit
+
+        with mock.patch.object(job_submit, "use_rq_pipeline", return_value=True):
+            with mock.patch.object(job_submit, "plan_and_insert_job") as plan:
+                with mock.patch.object(job_submit, "start_job") as start:
+                    used = job_submit.enqueue_rq_pipeline(
+                        job_id="j1",
+                        owner="u",
+                        sample="s",
+                        assemblers=["spades"],
+                        threads=2,
+                        spades_kmers=None,
+                        spades_careful=False,
+                        input_r1="//r1",
+                        input_r2="//r2",
+                        output_dir="/out",
+                        log_path="/log",
+                    )
+        self.assertTrue(used)
+        plan.assert_called_once()
+        start.assert_called_once_with("j1")
+
+
+class RegistryBundledLabelTests(unittest.TestCase):
+    def test_unicycler_bundled_label(self):
+        from scripts.software_registry import clear_registry_cache, load_registry
+
+        clear_registry_cache()
+        entry = load_registry()["unicycler"]
+        self.assertIn("bundled_spades_label", entry)
+        self.assertIn("unicycler", entry["bundled_spades_label"])
+
+
+class JobPublishTests(unittest.TestCase):
+    def test_archive_results_dir(self):
+        from web.job_publish import archive_results_dir
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            results = root / "results"
+            results.mkdir()
+            (results / "comparison.tsv").write_text("a\n", encoding="utf-8")
+            archive = archive_results_dir("job-1", results, root)
+            self.assertIsNotNone(archive)
+            self.assertTrue(archive.is_file())
+            self.assertGreater(archive.stat().st_size, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

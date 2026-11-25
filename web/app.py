@@ -1550,25 +1550,21 @@ def create_app(test_config: dict | None = None) -> Flask:
                 except OSError:
                     pass
         try:
-            from web.task_backend import use_rq_pipeline
+            from web.job_submit import enqueue_rq_pipeline
 
-            if use_rq_pipeline():
-                from web.orchestrator import plan_and_insert_job, start_job
-
-                plan_and_insert_job(
-                    job_id=job_id,
-                    owner=session["username"],
-                    sample=sample,
-                    assemblers=assembler_list,
-                    threads=threads,
-                    spades_kmers=kmers_text or None,
-                    spades_careful=bool(request.form.get("spades_careful")),
-                    input_r1=str(input_paths[0]),
-                    input_r2=str(input_paths[1]),
-                    output_dir=str(output_dir),
-                    log_path=str(log_path),
-                )
-                start_job(job_id)
+            enqueue_rq_pipeline(
+                job_id=job_id,
+                owner=session["username"],
+                sample=sample,
+                assemblers=assembler_list,
+                threads=threads,
+                spades_kmers=kmers_text or None,
+                spades_careful=bool(request.form.get("spades_careful")),
+                input_r1=str(input_paths[0]),
+                input_r2=str(input_paths[1]),
+                output_dir=str(output_dir),
+                log_path=str(log_path),
+            )
         except Exception:
             app.logger.exception("Could not enqueue RQ pipeline for %s", job_id)
             with connection() as db:
@@ -1878,6 +1874,33 @@ def create_app(test_config: dict | None = None) -> Flask:
         except sqlite3.Error:
             shutil.rmtree(job_dir, ignore_errors=True)
             raise
+        try:
+            from web.job_submit import enqueue_rq_pipeline
+
+            enqueue_rq_pipeline(
+                job_id=new_id,
+                owner=session["username"],
+                sample=row["sample"],
+                assemblers=assemblers,
+                threads=threads,
+                spades_kmers=row["spades_kmers"] or None,
+                spades_careful=bool(row["spades_careful"]),
+                input_r1=str(input_r1),
+                input_r2=str(input_r2),
+                output_dir=str(output_dir),
+                log_path=str(log_path),
+            )
+        except Exception:
+            app.logger.exception("Could not enqueue RQ pipeline for rerun %s", new_id)
+            with connection() as db:
+                db.execute(
+                    "UPDATE jobs SET status = 'failed', error = ? WHERE id = ? AND owner = ?",
+                    ("Could not start analysis queue", new_id, session["username"]),
+                )
+            return rerun_response(
+                {"error": "无法启动分析队列，请稍后重试。"},
+                503,
+            )
         return rerun_response(
             {"job": {"id": new_id, "status": "queued", "rerun_of": row["id"]}},
             202,

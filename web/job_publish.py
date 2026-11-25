@@ -24,14 +24,22 @@ def publish_work_to_output(source: Path, destination: Path) -> None:
             child.unlink(missing_ok=True)
 
 
-def archive_results_dir(job_id: str, archived_dir: Path, data_root: Path | None = None) -> Path | None:
-    root = data_root
-    if root is None:
-        raw = os.environ.get("ASSEMBLY_DATA_ROOT", "").strip()
-        if not raw:
-            return None
-        root = Path(raw)
-    archive_path = root / "archive" / "{}.tar.gz".format(job_id)
+def archive_results_dir(
+    job_id: str,
+    archived_dir: Path,
+    data_root: Path | None = None,
+    *,
+    archive_dir: Path | None = None,
+) -> Path | None:
+    if archive_dir is None:
+        root = data_root
+        if root is None:
+            raw = os.environ.get("ASSEMBLY_DATA_ROOT", "").strip()
+            if not raw:
+                return None
+            root = Path(raw)
+        archive_dir = root / "archive"
+    archive_path = Path(archive_dir) / "{}.tar.gz".format(job_id)
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     partial = archive_path.with_name(archive_path.name + ".partial")
     try:

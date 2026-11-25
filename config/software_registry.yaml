@@ -11,6 +11,7 @@ tools:
       - spades.py
   unicycler:
     image: bacterial-assembly-unicycler:0.5.1
+    bundled_spades_label: bundled in bacterial-assembly-unicycler:0.5.1
     executables:
       - unicycler
   shovill:

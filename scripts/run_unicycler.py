@@ -65,7 +65,16 @@ def main() -> int:
         )
         if tool_runtime() == "docker":
             # Bundled in the unicycler image; do not resolve spades.py to the SPAdes tool image.
-            line = "Unicycler SPAdes\tbundled in bacterial-assembly-unicycler:0.5.1\n"
+            try:
+                from scripts.software_registry import load_registry
+            except ImportError:
+                from software_registry import load_registry
+
+            label = load_registry().get("unicycler", {}).get(
+                "bundled_spades_label",
+                "bundled in bacterial-assembly-unicycler:0.5.1",
+            )
+            line = "Unicycler SPAdes\t{}\n".format(label)
             with versions_path.open("a", encoding="utf-8") as versions_file:
                 versions_file.write(line)
             append_log(log_path, "VERSION: {}".format(line.rstrip()))

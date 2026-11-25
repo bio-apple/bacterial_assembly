@@ -31,15 +31,16 @@ def _parse_yaml_tools(text: str) -> dict[str, dict]:
         if current is None:
             continue
         stripped = line.strip()
-        if stripped.startswith("image:"):
-            tools[current]["image"] = stripped.split(":", 1)[1].strip()
-            in_executables = False
-            continue
         if stripped == "executables:":
             in_executables = True
             continue
         if in_executables and stripped.startswith("- "):
             tools[current]["executables"].append(stripped[2:].strip())
+            continue
+        if ":" in stripped and not stripped.startswith("- "):
+            key, value = stripped.split(":", 1)
+            tools[current][key.strip()] = value.strip()
+            in_executables = False
     return tools
 
 
