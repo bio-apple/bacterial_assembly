@@ -140,9 +140,12 @@
   const uploadLabels = {
     pending: "等待上传",
     uploading: "上传中",
-    completed: "已完成",
+    checking: "正在核对",
+    completed: "可分析",
     interrupted: "传输中断",
   };
+  const kmerMessage = "参数校验错误。SPAdes k-mer 必须是不超过 127 的奇数，并用逗号分隔。";
+  const notReadyMessage = "两份 FASTQ 都通过字节校验和记录校验后，才能运行组装。";
   let submitting = false;
 
   function bindLane(role) {
@@ -204,9 +207,9 @@
   function updateReady() {
     const ready = lanes.r1.status === "completed" && lanes.r2.status === "completed";
     start.disabled = submitting || !ready;
-    start.title = ready ? "" : "两份 FASTQ 都上传并校验完成后，才能运行组装。";
+    start.title = ready ? "" : notReadyMessage;
     readyLine.classList.toggle("is-ready", ready);
-    readyLine.textContent = ready ? "可以开始分析" : "两份 FASTQ 都上传并校验完成后，才能运行组装。";
+    readyLine.textContent = ready ? "可以开始分析" : notReadyMessage;
   }
 
   function resetLane(lane) {
@@ -339,7 +342,7 @@
         lane.sessionId = upload.id;
         lane.status = "completed";
         lane.loadedPercent = 100;
-        lane.detailText = "SHA-256 和 FASTQ 记录已核对";
+        lane.detailText = "字节校验和记录校验已通过";
         renderLane(lane);
         updateReady();
         return;
@@ -370,8 +373,9 @@
         attemptBytes += bytes.length;
       }
       if (generation !== lane.generation) return;
+      lane.status = "checking";
       lane.loadedPercent = 99;
-      lane.detailText = "正在校验 SHA-256 和 FASTQ 记录";
+      lane.detailText = "先核对 SHA-256，再检查 FASTQ 记录";
       renderLane(lane);
       const completed = await api(`/api/uploads/${encodeURIComponent(upload.id)}/complete`, {
         method: "POST",
@@ -382,7 +386,7 @@
       lane.sessionId = completed.upload.id;
       lane.status = "completed";
       lane.loadedPercent = 100;
-      lane.detailText = "SHA-256 和 FASTQ 记录已核对";
+      lane.detailText = "字节校验和记录校验已通过";
       renderLane(lane);
       updateReady();
     } catch (error) {
@@ -570,9 +574,20 @@
       return;
     }
     if (lanes.r1.status !== "completed" || lanes.r2.status !== "completed") {
-      showMessage("两份 FASTQ 都上传并校验完成后，才能运行组装。");
+      showMessage(notReadyMessage);
       updateReady();
       return;
+    }
+    if (assemblerOrder.includes("spades")) {
+      const kmers = form.spades_kmers.value.trim();
+      if (kmers && !/^[1-9]\d*(,[1-9]\d*)*$/.test(kmers)) {
+        showMessage(kmerMessage);
+        return;
+      }
+      if (kmers && kmers.split(",").some((part) => Number(part) > 127 || Number(part) % 2 === 0)) {
+        showMessage(kmerMessage);
+        return;
+      }
     }
     submitting = true;
     updateReady();
@@ -584,9 +599,11 @@
       for (const name of assemblerOrder) body.append("assembler", name);
       body.set("r1_session", lanes.r1.sessionId);
       body.set("r2_session", lanes.r2.sessionId);
-      const kmers = form.spades_kmers.value.trim();
-      if (kmers) body.set("spades_kmers", kmers);
-      if (form.spades_careful.checked) body.set("spades_careful", "on");
+      if (assemblerOrder.includes("spades")) {
+        const kmers = form.spades_kmers.value.trim();
+        if (kmers) body.set("spades_kmers", kmers);
+        if (form.spades_careful.checked) body.set("spades_careful", "on");
+      }
       const data = await api("/api/jobs", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },

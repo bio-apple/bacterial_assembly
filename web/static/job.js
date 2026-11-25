@@ -185,7 +185,7 @@
       renderResources(job.detail.resources);
       renderQc(job);
       renderSteps(job.detail.steps);
-      renderComparison(job.detail.comparison);
+      renderComparison(job.detail);
       renderReports(job.detail.report_ready);
       refreshHost(job.status);
     }
@@ -286,55 +286,64 @@
     }
   }
 
-  function renderComparison(comparison) {
+  function renderComparison(detail) {
     const section = document.querySelector("#assembly-comparison");
-    if (!section || !comparison) return;
+    if (!section || !detail) return;
+    const views = Array.isArray(detail.comparisons) && detail.comparisons.length
+      ? detail.comparisons
+      : (detail.comparison ? [detail.comparison] : []);
+    if (!views.length) return;
+    const previous = section.querySelector('input[name="length-scope"]:checked');
+    const selectedScope = previous ? previous.value : "original";
     section.replaceChildren();
     const head = append(section, "div", "monitor-section-head");
     append(head, "h2", "", "组装器比较").id = "comparison-title";
-    append(head, "p", "", "只列出这次选择的组装器。数字来自 comparison.tsv。");
-    if (!comparison.ready) {
-      append(section, "p", "report-note", comparison.message || "比较尚未就绪。").id = "comparison-waiting";
-    } else {
-      const scroll = append(section, "div", "compare-scroll");
+    append(head, "p", "", "只列出这次选择的组装方法。一次只看一个长度口径。");
+    const scopes = append(section, "fieldset", "length-scopes");
+    append(scopes, "legend", "", "长度口径");
+    for (const view of views) {
+      const label = append(scopes, "label", "", "");
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = "length-scope";
+      input.value = view.scope || "original";
+      input.checked = input.value === selectedScope;
+      label.append(input, document.createTextNode(view.scope_label || input.value));
+    }
+    if (![...scopes.querySelectorAll("input")].some((input) => input.checked)) {
+      scopes.querySelector("input").checked = true;
+    }
+    for (const view of views) {
+      const panel = append(section, "div", "compare-panel");
+      panel.dataset.scope = view.scope || "original";
+      append(panel, "p", "report-note", view.note || "");
+      if (!view.ready) {
+        append(panel, "p", "report-note", view.message || "比较尚未就绪。");
+        continue;
+      }
+      const scroll = append(panel, "div", "compare-scroll");
       const table = append(scroll, "table", "compare-table metric-sheet");
       const thead = append(table, "thead");
       const header = append(thead, "tr");
       append(header, "th", "", "指标").scope = "col";
-      for (const column of comparison.columns || []) {
+      for (const column of view.columns || []) {
         append(header, "th", "", column.label || column.id || "").scope = "col";
       }
       const body = append(table, "tbody");
-      for (const metric of comparison.metrics || []) {
+      for (const metric of view.metrics || []) {
         const row = append(body, "tr");
         append(row, "th", "", metric.name || "").scope = "row";
         for (const cell of metric.cells || []) append(row, "td", "", cell.text || "");
       }
-      append(
-        table,
-        "caption",
-        "",
-        "指标名称与 comparison.tsv 的列一致。某个所选组装器没有对应行时，记为无记录。",
-      );
-      if ((comparison.missing_labels || []).length) {
-        append(
-          section,
-          "p",
-          "assembly-missing",
-          `这次选择了、但比较表里没有记录：${comparison.missing_labels.join("、")}。`,
-        );
+      append(table, "caption", "", view.caption || "");
+      if ((view.missing_labels || []).length) {
+        append(panel, "p", "assembly-missing", `这次选择了、但这一口径没有记录：${view.missing_labels.join("、")}。`);
       }
-      if ((comparison.extra_labels || []).length) {
-        append(
-          section,
-          "p",
-          "assembly-missing",
-          `比较表里还有这次没有选择的组装器：${comparison.extra_labels.join("、")}。未列入上表。`,
-        );
+      if ((view.extra_labels || []).length) {
+        append(panel, "p", "assembly-missing", `比较表里还有这次没有选择的组装方法：${view.extra_labels.join("、")}。未列入上表。`);
       }
-      append(section, "p", "compare-rule", comparison.rule || "不要仅根据 N50 自动推荐最佳组装结果。");
-      const charts = append(section, "div", "metric-charts");
-      for (const chart of comparison.charts || []) {
+      const charts = append(panel, "div", "metric-charts");
+      for (const chart of view.charts || []) {
         const figure = append(charts, "figure", "metric-chart");
         append(figure, "figcaption", "", chart.title || "");
         if ((chart.bars || []).length) {
@@ -346,9 +355,7 @@
             track.setAttribute("aria-hidden", "true");
             const fill = append(track, "span", "metric-bar-fill");
             const width = Number(bar.width);
-            if (Number.isFinite(width) && width >= 0 && width <= 100) {
-              fill.style.width = `${width}%`;
-            }
+            if (Number.isFinite(width) && width >= 0 && width <= 100) fill.style.width = `${width}%`;
             append(line, "span", "metric-bar-value", bar.text || "");
           }
         } else {
@@ -356,9 +363,7 @@
         }
       }
     }
-    if (!comparison.ready) {
-      append(section, "p", "compare-rule", comparison.rule || "不要仅根据 N50 自动推荐最佳组装结果。");
-    }
+    append(section, "p", "compare-rule", views[0].rule || "不要仅根据 N50 自动推荐最佳组装结果。");
   }
 
   function renderReports(ready) {

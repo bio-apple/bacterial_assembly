@@ -678,6 +678,7 @@ class WebWorkbenchTests(unittest.TestCase):
         self.assertEqual(rejected.status_code, 400)
         self.assertEqual(rejected.json["code"], "fastq_invalid")
         self.assertIn("记录无法通过检查", rejected.json["error"])
+        self.assertIn("第 1 条记录", rejected.json["error"])
         validated = self.app.config["UPLOAD_VALIDATED"] / upload["id"] / "read.fastq"
         self.assertFalse(validated.exists())
         status = self.client.get("/api/uploads/{}".format(upload["id"]))
@@ -708,6 +709,7 @@ class WebWorkbenchTests(unittest.TestCase):
         self.assertEqual(rejected.status_code, 400)
         self.assertEqual(rejected.json["code"], "fastq_invalid")
         self.assertIn("记录无法通过检查", rejected.json["error"])
+        self.assertIn("第 1 条记录", rejected.json["error"])
         self.assertFalse(any(self.app.config["JOBS_ROOT"].rglob("R1.fastq*")))
 
     def test_chunk_assemble_rejects_sha256_mismatch(self):
@@ -1883,12 +1885,24 @@ class WebWorkbenchTests(unittest.TestCase):
                             "exit_code": 0,
                         },
                         {
+                            "id": "megahit:quast:gt1000",
+                            "state": "done",
+                            "detail": "没有达到阈值的 contig",
+                            "exit_code": 0,
+                        },
+                        {
                             "id": "comparison",
                             "state": "waiting",
                         },
                     ]
                 }
             ),
+            encoding="utf-8",
+        )
+        gt500 = output_dir / "quast" / "spades" / "gt500bp"
+        gt500.mkdir(parents=True)
+        (gt500 / "report.tsv").write_text(
+            "# contigs\t4\nTotal length\t4000\nLargest contig\t2000\nN50\t111\nL50\t1\nGC (%)\t40\n",
             encoding="utf-8",
         )
         with closing(sqlite3.connect(self.app.config["DATABASE"])) as db:
@@ -1917,6 +1931,15 @@ class WebWorkbenchTests(unittest.TestCase):
         self.assertNotIn("shovill", [bar["id"] for bar in comparison_detail["charts"][0]["bars"]])
         self.assertEqual(comparison_detail["missing"], ["unicycler"])
         self.assertEqual(comparison_detail["extra"], ["shovill"])
+        scopes = {item["scope"]: item for item in detail["comparisons"]}
+        self.assertEqual(list(scopes), ["original", "gt500", "gt1000"])
+        filtered_n50 = next(metric for metric in scopes["gt500"]["metrics"] if metric["name"] == "N50")
+        self.assertEqual(
+            [cell["text"] for cell in filtered_n50["cells"]],
+            ["111", "无记录", "无记录"],
+        )
+        threshold_n50 = next(metric for metric in scopes["gt1000"]["metrics"] if metric["name"] == "N50")
+        self.assertEqual(threshold_n50["cells"][2]["text"], "没有达到阈值的 contig")
         self.assertEqual(detail["resources"]["threads"], 3)
         self.assertEqual(detail["resources"]["memory_gib"], 7)
         self.assertNotIn("best", json.dumps(detail))
@@ -1943,6 +1966,11 @@ class WebWorkbenchTests(unittest.TestCase):
         self.assertIn('style="width: 40%"', text)
         self.assertEqual(text.count("推荐"), 1)
         self.assertIn("不要仅根据 N50 自动推荐最佳组装结果。", text)
+        self.assertIn("原始组装", text)
+        self.assertIn("&gt;500 bp", text)
+        self.assertIn("&gt;1000 bp", text)
+        self.assertIn("111", text)
+        self.assertIn("没有达到阈值的 contig", text)
         self.assertNotIn("<progress", text)
 
         report = self.client.get("/jobs/{}/report".format(job_id))

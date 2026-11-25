@@ -65,7 +65,7 @@
   {% if report.qc_note %}<p class="report-note">{{ report.qc_note }}</p>{% endif %}
 </section>
 
-{% with comparison=report.comparison %}
+{% with comparisons=report.comparisons %}
 {% include "assembler_comparison.html" %}
 {% endwith %}
 

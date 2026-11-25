@@ -39,12 +39,13 @@ from werkzeug.utils import secure_filename
 from scripts.common import cpu_share
 from scripts.stage_record import build_progress, load_stage_record
 from web.reports import (
+    THRESHOLD_ABSENT,
     assemble_report_model,
-    comparison_view,
     qc_sheet,
     report_tsv,
     resource_lines,
     result_sources_present,
+    scope_comparison,
     selected_assemblers,
 )
 from web.errors import (
@@ -573,8 +574,8 @@ def create_app(test_config: dict | None = None) -> Flask:
             return fail("upload_incomplete", text, 400)
         if "分片" in text:
             return fail("upload_failed", "文件上传错误。{}".format(text), 400)
-        if text == FASTQ_RECORDS:
-            return fail("fastq_invalid", FASTQ_RECORDS, 400)
+        if "记录无法通过检查" in text:
+            return fail("fastq_invalid", text, 400)
         if "empty" in text.lower() or "FASTQ" in text:
             return fail("fastq_invalid", FASTQ_EMPTY, 400)
         return fail("upload_invalid", text, 400)
@@ -653,6 +654,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         assemblers = selected_assemblers(row["assemblers"])
         comparison_text = first_pipeline_text(directories, "comparison.tsv", 2 * 1024 * 1024)
         parsed = parse_comparison_text(comparison_text)
+        comparisons = pipeline_comparisons(row["output_dir"], assemblers, parsed, directories)
         return {
             "sample_name": sample_name,
             "sample_id": column_value(row, "sample_id"),
@@ -665,7 +667,8 @@ def create_app(test_config: dict | None = None) -> Flask:
                 "spades_careful": bool(row["spades_careful"]),
             },
             "resources": resources,
-            "comparison": comparison_view(assemblers, parsed),
+            "comparison": comparisons[0],
+            "comparisons": comparisons,
             "steps": recorded_steps(row),
             "qc": qc_sheet(load_fastp_documents(directories)),
             "fastp_html": fastp_html_file(directories) is not None,
@@ -692,6 +695,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         ):
             return None
         assemblers = selected_assemblers(row["assemblers"])
+        comparisons = pipeline_comparisons(row["output_dir"], assemblers, comparison_rows, directories)
         resources = resource_lines(
             row["threads"],
             first_pipeline_text(directories, "run.log", 2 * 1024 * 1024),
@@ -710,6 +714,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             comparison_rows=comparison_rows,
             job_error=row["error"],
             stage_failures=failures,
+            comparisons=comparisons,
         )
 
     @app.get("/login")
@@ -1222,7 +1227,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             return fail("checksum_mismatch", "SHA-256 校验不一致。", 400)
         try:
             check_fastq_records(staged, app.config.get("FASTQ_CHECK_COMMAND"))
-        except FastqRecordError:
+        except FastqRecordError as error:
             staged.unlink(missing_ok=True)
             with connection() as db:
                 db.execute(
@@ -1231,7 +1236,10 @@ def create_app(test_config: dict | None = None) -> Flask:
                     "WHERE id = ? AND owner = ?",
                     (row["id"], session["username"]),
                 )
-            return fail("fastq_invalid", FASTQ_RECORDS, 400)
+            message = str(error)
+            if "记录无法通过检查" not in message:
+                message = FASTQ_RECORDS
+            return fail("fastq_invalid", message, 400)
         except FastqCheckUnavailable:
             staged.unlink(missing_ok=True)
             app.logger.exception("Could not check uploaded FASTQ records")
@@ -2103,6 +2111,77 @@ def read_regular_text(directory: Path, relative: str, limit: int) -> str | None:
         return path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
+
+
+QUAST_SCOPE_DIRS = {"gt500": "gt500bp", "gt1000": "gt1000bp"}
+
+
+def pipeline_stages(output_dir: str) -> list[dict]:
+    try:
+        output = contained_path(current_app.config["DATA_ROOT"], output_dir)
+    except (OSError, ValueError):
+        return []
+    record = load_stage_record(stage_record_path(output))
+    return record["stages"]
+
+
+def report_metric_row(assembler: str, text: str | None) -> dict | None:
+    if not text or not text.strip():
+        return None
+    metrics = {}
+    for row in csv.reader(text.splitlines(), delimiter="\t"):
+        if len(row) > 1 and row[0].strip():
+            metrics[row[0].strip()] = row[1].strip()
+    if not metrics:
+        return None
+    return {"assembler": assembler, "metrics": metrics}
+
+
+def filtered_comparison(directories: list[Path], assemblers: list[str] | None, evaluation: str, stages: list[dict]):
+    rows = []
+    absent = {}
+    folder = QUAST_SCOPE_DIRS[evaluation]
+    stage_id_suffix = ":quast:{}".format(evaluation)
+    skipped = {
+        stage["id"][: -len(stage_id_suffix)]
+        for stage in stages
+        if stage.get("id", "").endswith(stage_id_suffix)
+        and stage.get("state") == "done"
+        and stage.get("detail") == THRESHOLD_ABSENT
+    }
+    for name in assemblers or []:
+        if name not in ASSEMBLERS:
+            continue
+        parsed = report_metric_row(
+            name,
+            first_pipeline_text(
+                directories,
+                "quast/{}/{}/report.tsv".format(name, folder),
+                2 * 1024 * 1024,
+            ),
+        )
+        if parsed is not None:
+            rows.append(parsed)
+        elif name in skipped:
+            absent[name] = THRESHOLD_ABSENT
+    return rows, absent
+
+
+def pipeline_comparisons(output_dir: str, assemblers: list[str] | None, original_rows: list[dict], directories: list[Path]):
+    stages = pipeline_stages(output_dir)
+    views = [scope_comparison("original", assemblers, original_rows)]
+    for evaluation in ("gt500", "gt1000"):
+        rows, absent = filtered_comparison(directories, assemblers, evaluation, stages)
+        views.append(
+            scope_comparison(
+                evaluation,
+                assemblers,
+                rows,
+                absent_text=absent,
+                waiting="这一口径还没有评估结果。",
+            )
+        )
+    return views
 
 
 def first_pipeline_text(directories: list[Path], relative: str, limit: int) -> str | None:

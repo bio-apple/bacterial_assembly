@@ -5,6 +5,7 @@ only when the process exits 0 and the log says no errors were found.
 """
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from web.errors import FASTQ_RECORDS
 
 ERROR_MARK = "Error found at readnumber"
 SUCCESS_MARK = "no errors found"
+READ_NUMBER = re.compile(r"Error found at readnumber:\s*(\d+)")
 
 
 class FastqRecordError(ValueError):
@@ -26,6 +28,15 @@ def records_accepted(returncode: int, output: str) -> bool:
     if returncode != 0 or ERROR_MARK in output:
         return False
     return SUCCESS_MARK in output
+
+
+def record_failure_message(output: str) -> str:
+    match = READ_NUMBER.search(output or "")
+    if match is None:
+        return FASTQ_RECORDS
+    return "FASTQ 格式错误。第 {} 条记录无法通过检查，文件没有进入可分析状态。".format(
+        int(match.group(1))
+    )
 
 
 def check_command(configured) -> list[str]:
@@ -53,4 +64,4 @@ def check_fastq_records(path: Path, command=None) -> None:
         raise FastqCheckUnavailable("ValidateFastq could not be started") from error
     output = "{}\n{}".format(result.stdout or "", result.stderr or "")
     if not records_accepted(result.returncode, output):
-        raise FastqRecordError(FASTQ_RECORDS)
+        raise FastqRecordError(record_failure_message(output))

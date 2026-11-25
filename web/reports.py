@@ -55,7 +55,25 @@ FASTP_FIELDS = (
 THREADS_LINE = re.compile(r"^Threads per method:\s+(\d+)\s*$", re.MULTILINE)
 MEMORY_LINE = re.compile(r"^Memory per method:\s+(\d+)\s+GiB\s*$", re.MULTILINE)
 COMPARISON_WAITING = "比较尚未就绪。"
+THRESHOLD_ABSENT = "没有达到阈值的 contig"
 NO_BEST_ASSEMBLY = "不要仅根据 N50 自动推荐最佳组装结果。"
+LENGTH_SCOPES = {
+    "original": (
+        "原始组装",
+        "这次选择的组装方法的原始组装。不包含按长度筛过的 contig。",
+        "指标名称与 comparison.tsv 的列一致。某个所选组装方法没有对应行时，记为无记录。",
+    ),
+    "gt500": (
+        ">500 bp",
+        "只评估长度大于 500 bp 的 contig。这一档不和原始组装放在同一张表里。",
+        "数字来自这一档的 QUAST 报告。没有达到阈值时，记为「没有达到阈值的 contig」。",
+    ),
+    "gt1000": (
+        ">1000 bp",
+        "只评估长度大于 1000 bp 的 contig。这一档不和原始组装放在同一张表里。",
+        "数字来自这一档的 QUAST 报告。没有达到阈值时，记为「没有达到阈值的 contig」。",
+    ),
+}
 
 
 def selected_assemblers(raw) -> list[str] | None:
@@ -102,33 +120,36 @@ def bar_width(value: float, maximum: float) -> int | float:
     return rounded
 
 
-def comparison_view(assemblers: list[str] | None, rows: list[dict]) -> dict:
+def _empty_comparison(message: str) -> dict:
+    return {
+        "ready": False,
+        "message": message,
+        "columns": [],
+        "metrics": [],
+        "missing": [],
+        "missing_labels": [],
+        "extra": [],
+        "extra_labels": [],
+        "charts": [],
+        "rule": NO_BEST_ASSEMBLY,
+    }
+
+
+def comparison_view(
+    assemblers: list[str] | None,
+    rows: list[dict],
+    absent_text: dict | None = None,
+    waiting: str = COMPARISON_WAITING,
+) -> dict:
+    noted = {
+        name: text
+        for name, text in (absent_text or {}).items()
+        if isinstance(name, str) and isinstance(text, str) and text.strip()
+    }
     if assemblers is None:
-        return {
-            "ready": False,
-            "message": "组装器选择无法读取，比较未列出。",
-            "columns": [],
-            "metrics": [],
-            "missing": [],
-            "missing_labels": [],
-            "extra": [],
-            "extra_labels": [],
-            "charts": [],
-            "rule": NO_BEST_ASSEMBLY,
-        }
-    if not rows:
-        return {
-            "ready": False,
-            "message": COMPARISON_WAITING,
-            "columns": [],
-            "metrics": [],
-            "missing": [],
-            "missing_labels": [],
-            "extra": [],
-            "extra_labels": [],
-            "charts": [],
-            "rule": NO_BEST_ASSEMBLY,
-        }
+        return _empty_comparison("组装器选择无法读取，比较未列出。")
+    if not rows and not noted:
+        return _empty_comparison(waiting)
     present = {}
     metric_order = []
     for item in rows:
@@ -140,6 +161,8 @@ def comparison_view(assemblers: list[str] | None, rows: list[dict]) -> dict:
         for metric in metrics:
             if metric not in metric_order:
                 metric_order.append(metric)
+    if not metric_order and noted:
+        metric_order = list(KNOWN_METRICS)
     columns = [{"id": name, "label": assembler_label(name)} for name in assemblers]
     ordered = [metric for metric in KNOWN_METRICS if metric in metric_order]
     ordered.extend(metric for metric in metric_order if metric not in ordered)
@@ -149,7 +172,7 @@ def comparison_view(assemblers: list[str] | None, rows: list[dict]) -> dict:
         for name in assemblers:
             values = present.get(name)
             if values is None:
-                cells.append({"text": "无记录", "number": None})
+                cells.append({"text": noted.get(name, "无记录"), "number": None})
                 continue
             if metric not in values or str(values[metric]).strip() == "":
                 cells.append({"text": "未记录", "number": None})
@@ -157,7 +180,7 @@ def comparison_view(assemblers: list[str] | None, rows: list[dict]) -> dict:
             text = str(values[metric]).strip()
             cells.append({"text": text, "number": parse_metric_number(text)})
         table.append({"name": metric, "cells": cells})
-    missing = [name for name in assemblers if name not in present]
+    missing = [name for name in assemblers if name not in present and name not in noted]
     extra = [name for name in present if name not in assemblers]
     charts = []
     for metric_name, title in CHART_METRICS:
@@ -199,6 +222,22 @@ def comparison_view(assemblers: list[str] | None, rows: list[dict]) -> dict:
         "charts": charts,
         "rule": NO_BEST_ASSEMBLY,
     }
+
+
+def scope_comparison(
+    scope: str,
+    assemblers: list[str] | None,
+    rows: list[dict],
+    absent_text: dict | None = None,
+    waiting: str = COMPARISON_WAITING,
+) -> dict:
+    view = comparison_view(assemblers, rows, absent_text=absent_text, waiting=waiting)
+    label, note, caption = LENGTH_SCOPES[scope]
+    view["scope"] = scope
+    view["scope_label"] = label
+    view["note"] = note
+    view["caption"] = caption
+    return view
 
 
 def resource_lines(job_threads, run_log: str | None) -> dict:
@@ -414,6 +453,7 @@ def assemble_report_model(
     comparison_rows: list[dict],
     job_error: str | None,
     stage_failures: list[dict],
+    comparisons: list[dict] | None = None,
 ) -> dict:
     record = [_parameter("样本", sample_name)]
     if batch:
@@ -458,6 +498,8 @@ def assemble_report_model(
     versions = parse_versions(versions_text)
     qc = qc_metrics(fastp_documents)
     comparison = comparison_view(assemblers, comparison_rows)
+    if comparisons is None:
+        comparisons = [scope_comparison("original", assemblers, comparison_rows)]
     anomalies = []
     if isinstance(job_error, str) and job_error.strip():
         anomalies.append({"kind": "任务错误", "text": job_error.strip()})
@@ -481,6 +523,7 @@ def assemble_report_model(
         "qc_note": qc["note"],
         "qc_sheet": qc_sheet(fastp_documents),
         "comparison": comparison,
+        "comparisons": comparisons,
         "anomalies": anomalies,
         "anomaly_note": "" if anomalies else "没有记录到异常。",
     }

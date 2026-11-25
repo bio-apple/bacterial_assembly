@@ -1,61 +1,74 @@
 <section class="monitor-block" id="assembly-comparison" aria-labelledby="comparison-title">
   <div class="monitor-section-head">
     <h2 id="comparison-title">组装器比较</h2>
-    <p>只列出这次选择的组装器。数字来自 comparison.tsv。</p>
+    <p>只列出这次选择的组装方法。一次只看一个长度口径。</p>
   </div>
-  {% if not comparison.ready %}
-  <p class="report-note" id="comparison-waiting">{{ comparison.message }}</p>
-  <p class="compare-rule">{{ comparison.rule }}</p>
-  {% else %}
-  <div class="compare-scroll">
-    <table class="compare-table metric-sheet">
-      <thead>
-        <tr>
-          <th scope="col">指标</th>
-          {% for column in comparison.columns %}
-          <th scope="col">{{ column.label }}</th>
-          {% endfor %}
-        </tr>
-      </thead>
-      <tbody>
-        {% for metric in comparison.metrics %}
-        <tr>
-          <th scope="row">{{ metric.name }}</th>
-          {% for cell in metric.cells %}
-          <td>{{ cell.text }}</td>
-          {% endfor %}
-        </tr>
-        {% endfor %}
-      </tbody>
-      <caption>指标名称与 comparison.tsv 的列一致。某个所选组装器没有对应行时，记为无记录。</caption>
-    </table>
-  </div>
-  {% if comparison.missing_labels %}
-  <p class="assembly-missing">这次选择了、但比较表里没有记录：{{ comparison.missing_labels | join("、") }}。</p>
-  {% endif %}
-  {% if comparison.extra_labels %}
-  <p class="assembly-missing">比较表里还有这次没有选择的组装器：{{ comparison.extra_labels | join("、") }}。未列入上表。</p>
-  {% endif %}
-  <p class="compare-rule">{{ comparison.rule }}</p>
-  <div class="metric-charts">
-    {% for chart in comparison.charts %}
-    <figure class="metric-chart">
-      <figcaption>{{ chart.title }}</figcaption>
-      {% if chart.bars %}
-      <div class="metric-bars">
-        {% for bar in chart.bars %}
-        <div class="metric-bar-row">
-          <span class="metric-bar-name">{{ bar.label }}</span>
-          <span class="metric-bar-track" aria-hidden="true"><span class="metric-bar-fill" style="width: {{ bar.width }}%"></span></span>
-          <span class="metric-bar-value">{{ bar.text }}</span>
-        </div>
-        {% endfor %}
-      </div>
-      {% else %}
-      <p class="report-note">{{ chart.empty }}</p>
-      {% endif %}
-    </figure>
+  <fieldset class="length-scopes">
+    <legend>长度口径</legend>
+    {% for item in comparisons %}
+    <label>
+      <input type="radio" name="length-scope" value="{{ item.scope }}" {% if loop.first %}checked{% endif %}>
+      {{ item.scope_label }}
+    </label>
     {% endfor %}
+  </fieldset>
+  {% for item in comparisons %}
+  <div class="compare-panel" data-scope="{{ item.scope }}">
+    <p class="report-note">{{ item.note }}</p>
+    {% if not item.ready %}
+    <p class="report-note">{{ item.message }}</p>
+    {% else %}
+    <div class="compare-scroll">
+      <table class="compare-table metric-sheet">
+        <thead>
+          <tr>
+            <th scope="col">指标</th>
+            {% for column in item.columns %}
+            <th scope="col">{{ column.label }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for metric in item.metrics %}
+          <tr>
+            <th scope="row">{{ metric.name }}</th>
+            {% for cell in metric.cells %}
+            <td>{{ cell.text }}</td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+        <caption>{{ item.caption }}</caption>
+      </table>
+    </div>
+    {% if item.missing_labels %}
+    <p class="assembly-missing">这次选择了、但这一口径没有记录：{{ item.missing_labels | join("、") }}。</p>
+    {% endif %}
+    {% if item.extra_labels %}
+    <p class="assembly-missing">比较表里还有这次没有选择的组装方法：{{ item.extra_labels | join("、") }}。未列入上表。</p>
+    {% endif %}
+    <div class="metric-charts">
+      {% for chart in item.charts %}
+      <figure class="metric-chart">
+        <figcaption>{{ chart.title }}</figcaption>
+        {% if chart.bars %}
+        <div class="metric-bars">
+          {% for bar in chart.bars %}
+          <div class="metric-bar-row">
+            <span class="metric-bar-name">{{ bar.label }}</span>
+            <span class="metric-bar-track" aria-hidden="true"><span class="metric-bar-fill" style="width: {{ bar.width }}%"></span></span>
+            <span class="metric-bar-value">{{ bar.text }}</span>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="report-note">{{ chart.empty }}</p>
+        {% endif %}
+      </figure>
+      {% endfor %}
+    </div>
+    {% endif %}
   </div>
-  {% endif %}
+  {% endfor %}
+  <p class="compare-rule">{{ comparisons[0].rule }}</p>
 </section>

@@ -304,6 +304,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .transfer-name { flex: 1; min-width: 0; overflow: hidden; color: var(--muted); font: 10px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .transfer-state { color: var(--faint); font: 10px var(--sans); white-space: nowrap; }
 .transfer-state.state-uploading { color: var(--teal); }
+.transfer-state.state-checking { color: var(--deep); }
 .transfer-state.state-completed { color: #376d48; }
 .transfer-state.state-interrupted { color: var(--coral); }
 .transfer-percent { color: var(--ink); font: 12px var(--mono); font-variant-numeric: tabular-nums; }
@@ -962,6 +963,27 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .monitor-block { margin-top: 28px; }
 .monitor-block h2, .monitor-block h3 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -.03em; }
 .monitor-block h3 { margin-top: 18px; font-size: 14px; }
+.length-scopes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin: 14px 0 0;
+  padding: 0;
+  border: 0;
+}
+.length-scopes legend {
+  padding: 0;
+  color: var(--faint);
+  font: 10px var(--mono);
+  letter-spacing: .08em;
+}
+.length-scopes label { color: var(--muted); font-size: 13px; }
+.length-scopes label:has(input:checked) { color: var(--ink); font-weight: 650; }
+.compare-panel { display: none; }
+#assembly-comparison:has(input[value="original"]:checked) .compare-panel[data-scope="original"],
+#assembly-comparison:has(input[value="gt500"]:checked) .compare-panel[data-scope="gt500"],
+#assembly-comparison:has(input[value="gt1000"]:checked) .compare-panel[data-scope="gt1000"] { display: block; }
 .host-usage p, .report-note, .assembly-missing, .compare-rule {
   margin: 10px 0 0;
   color: var(--muted);
