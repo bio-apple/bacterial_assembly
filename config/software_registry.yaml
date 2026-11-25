@@ -1,0 +1,27 @@
+# Whitelist of bioinformatics tools runnable via TOOL_RUNTIME=docker.
+# Users cannot override image names or mounts.
+tools:
+  fastp:
+    image: bacterial-assembly-fastp:0.23.4
+    executables:
+      - fastp
+  spades:
+    image: bacterial-assembly-spades:3.15.5
+    executables:
+      - spades.py
+  unicycler:
+    image: bacterial-assembly-unicycler:0.5.1
+    executables:
+      - unicycler
+  shovill:
+    image: bacterial-assembly-shovill:1.4.2
+    executables:
+      - shovill
+  megahit:
+    image: bacterial-assembly-megahit:1.2.9
+    executables:
+      - megahit
+  quast:
+    image: bacterial-assembly-quast:5.2.0
+    executables:
+      - quast.py

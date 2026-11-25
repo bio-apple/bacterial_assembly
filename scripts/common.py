@@ -121,12 +121,51 @@ def append_log(log_path: Path, text: str) -> None:
             log_file.write("\n")
 
 
+def _uses_docker_runtime(command: Sequence[str]) -> bool:
+    try:
+        from scripts.docker_executor import tool_runtime
+        from scripts.software_registry import resolve_tool
+    except ImportError:
+        from docker_executor import tool_runtime
+        from software_registry import resolve_tool
+
+    return tool_runtime() == "docker" and resolve_tool(command) is not None
+
+
 def record_version(
     name: str,
     command: Sequence[str],
     versions_path: Path,
     log_path: Path,
 ) -> None:
+    if _uses_docker_runtime(command):
+        try:
+            from scripts.docker_executor import get_executor
+        except ImportError:
+            from docker_executor import get_executor
+
+        scratch = log_path.parent / ".version-{}.log".format(Path(log_path).stem)
+        get_executor().run_tool(command, "{} version".format(name), scratch)
+        output = scratch.read_text(encoding="utf-8") if scratch.is_file() else ""
+        scratch.unlink(missing_ok=True)
+        # Prefer the last non-header line from the tool itself.
+        lines = [
+            line.strip()
+            for line in output.splitlines()
+            if line.strip()
+            and not line.startswith("== ")
+            and not line.startswith("DOCKER IMAGE:")
+            and not line.startswith("COMMAND:")
+        ]
+        version = " ".join((lines[-1] if lines else output).split())
+        if not version:
+            raise RuntimeError("could not get {} version from docker tool".format(name))
+        line = "{}\t{}\n".format(name, version)
+        with versions_path.open("a", encoding="utf-8") as versions_file:
+            versions_file.write(line)
+        append_log(log_path, "VERSION: {}".format(line.rstrip()))
+        return
+
     result = subprocess.run(
         command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
     )
@@ -142,6 +181,15 @@ def record_version(
 
 
 def run_command(command: Sequence[str], label: str, log_path: Path) -> None:
+    if _uses_docker_runtime(command):
+        try:
+            from scripts.docker_executor import get_executor
+        except ImportError:
+            from docker_executor import get_executor
+
+        get_executor().run_tool(command, label, log_path)
+        return
+
     command_line = shlex.join(command)
     header = "\n== {} ==\nCOMMAND: {}\n".format(label, command_line)
     print(header, end="", flush=True)

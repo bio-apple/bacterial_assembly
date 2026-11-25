@@ -83,6 +83,12 @@ def run_script(
     environment = os.environ.copy()
     if thread_count is not None:
         environment["_ASSEMBLY_ASSIGNED_THREADS"] = str(thread_count)
+    if os.environ.get("_ASSEMBLY_JOB_ID"):
+        environment["_ASSEMBLY_JOB_ID"] = os.environ["_ASSEMBLY_JOB_ID"]
+    if os.environ.get("_ASSEMBLY_METHOD_MEMORY_GIB"):
+        environment["_ASSEMBLY_METHOD_MEMORY_GIB"] = os.environ[
+            "_ASSEMBLY_METHOD_MEMORY_GIB"
+        ]
     if stream_log_path is None:
         subprocess.run(command, check=True, env=environment)
         return
@@ -313,11 +319,12 @@ def run_assembler(
             )
             stages.finish(stage_id, exit_code=0)
         except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+            # ADR 0013: evaluation failure does not reverse assembly success.
             stages.finish(
                 stage_id, "failed", detail=str(error), exit_code=recorded_exit_code(error)
             )
             _record_method_error(error, method_log, root_log, log_lock, log_prefix)
-            return assembler, False
+            continue
     with log_lock:
         append_log(root_log, "{}Method complete".format(log_prefix))
     return assembler, True
@@ -360,6 +367,7 @@ def main() -> int:
             job_token = str(uuid.UUID(args.job_id))
         except ValueError:
             parser.error("--job-id must be a UUID")
+        os.environ["_ASSEMBLY_JOB_ID"] = job_token
         (outdir / "process.json").write_text(
             json.dumps(
                 {
@@ -371,6 +379,7 @@ def main() -> int:
             + "\n",
             encoding="utf-8",
         )
+    os.environ["_ASSEMBLY_METHOD_MEMORY_GIB"] = str(method_memory_gib)
     log_path = outdir / "run.log"
     versions_path = outdir / "versions.txt"
     versions_path.write_text("", encoding="utf-8")

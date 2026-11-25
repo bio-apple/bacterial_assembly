@@ -4,6 +4,4 @@ status: accepted
 
 # 运行数据按生命周期分目录
 
-Web 与 worker 的运行数据留在 `ASSEMBLY_DATA_ROOT`（Compose 里是 `/data`，对应 `deploy/data/`），不放进 Web 代码目录。浏览器分片上传的未完成字节在 `uploads/chunks`，multipart 直传建任务时的短暂暂存在 `uploads/incoming`，校验通过但尚未绑定任务的文件在 `uploads/validated`。分析只读 `jobs/<id>/input`。worker 先把 `--outdir` 指到 `jobs/<id>/work`，结束再发布到 `jobs/<id>/output`。日志在 `jobs/<id>/logs`，下载包在 `archive/<id>.tar.gz`，队列库是 `database/jobs.sqlite3`，临时目录是 `temp/`。
-
-接收中的字节和已经提交的 reads 分开存放，清理临时文件或迁到独立磁盘时不易误删结果。若数据根上还有 `jobs.sqlite3`、而 `database/jobs.sqlite3` 不存在，启动时只移动这个库文件，不删表。Compose 将 worker 固定为单实例；队列锁放在数据根的 `worker.lock`，避免两个 worker 同时执行任务。
+Web 与 Worker 的运行数据在 `ASSEMBLY_DATA_ROOT`（Compose：`/data` ← `deploy/data/`），不放进 Web 代码目录。分片上传在 `uploads/chunks`，直传暂存在 `uploads/incoming`，校验通过待绑定在 `uploads/validated`。分析只读 `jobs/<id>/input`；运行写入 `jobs/<id>/work`，结束后发布到 `jobs/<id>/output`。日志在 `jobs/<id>/logs`，下载包在 `archive/<id>.tar.gz`，临时目录 `temp/`。Web 读模型库为 `database/jobs.sqlite3`；步骤调度状态在 PostgreSQL。组装 Worker 与 QC Worker 挂载同一数据根。

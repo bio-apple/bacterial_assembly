@@ -1549,6 +1549,34 @@ def create_app(test_config: dict | None = None) -> Flask:
                     session_directory(app.config["STAGING_ROOT"], upload["id"]).rmdir()
                 except OSError:
                     pass
+        try:
+            from web.task_backend import use_rq_pipeline
+
+            if use_rq_pipeline():
+                from web.orchestrator import plan_and_insert_job, start_job
+
+                plan_and_insert_job(
+                    job_id=job_id,
+                    owner=session["username"],
+                    sample=sample,
+                    assemblers=assembler_list,
+                    threads=threads,
+                    spades_kmers=kmers_text or None,
+                    spades_careful=bool(request.form.get("spades_careful")),
+                    input_r1=str(input_paths[0]),
+                    input_r2=str(input_paths[1]),
+                    output_dir=str(output_dir),
+                    log_path=str(log_path),
+                )
+                start_job(job_id)
+        except Exception:
+            app.logger.exception("Could not enqueue RQ pipeline for %s", job_id)
+            with connection() as db:
+                db.execute(
+                    "UPDATE jobs SET status = 'failed', error = ? WHERE id = ? AND owner = ?",
+                    ("Could not start analysis queue", job_id, session["username"]),
+                )
+            return fail("resource_unavailable", "无法启动分析队列，请稍后重试。", 503)
         return jsonify(job={"id": job_id, "status": "queued"}), 202
 
     @app.post("/api/jobs/<job_id>/cancel")
@@ -1590,6 +1618,12 @@ def create_app(test_config: dict | None = None) -> Flask:
                     fresh = db.execute(
                         "SELECT * FROM jobs WHERE id = ?", (job_id,)
                     ).fetchone()
+                    try:
+                        from web.rq_cancel import cancel_rq_job
+
+                        cancel_rq_job(job_id)
+                    except Exception:
+                        app.logger.exception("RQ cancel failed for %s", job_id)
                     return jsonify(job=serialize_job(fresh)), 200
                 row = db.execute(
                     "SELECT * FROM jobs WHERE id = ? AND owner = ?",
@@ -1606,6 +1640,12 @@ def create_app(test_config: dict | None = None) -> Flask:
             if updated.rowcount != 1:
                 return fail("cancel_rejected", "这个任务已经不能取消。", 409)
             fresh = db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        try:
+            from web.rq_cancel import cancel_rq_job
+
+            cancel_rq_job(job_id)
+        except Exception:
+            app.logger.exception("RQ cancel failed for %s", job_id)
         return jsonify(job=serialize_job(fresh)), 202
 
     @app.get("/jobs/<job_id>")

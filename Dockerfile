@@ -23,13 +23,20 @@ RUN conda install --yes --name base \
         gunicorn=23.0.0 \
         openjdk=8 \
         biopet-validatefastq=0.1.1 \
+        pip \
     && micromamba create --yes --name unicycler \
         --channel conda-forge \
         --channel bioconda \
         python=3.10 \
         unicycler=0.5.1 \
         spades=4.0.0 \
+    && pip install --no-cache-dir \
+        docker==7.1.0 \
+        'psycopg[binary]==3.2.3' \
+        redis==5.2.1 \
+        rq==2.1.0 \
     && micromamba clean --all --yes \
     && conda clean --all --yes
 
+# Local bioinformatics binaries remain for TOOL_RUNTIME=local (ADR 0010 transition).
 WORKDIR /work

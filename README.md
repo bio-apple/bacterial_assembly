@@ -4,10 +4,10 @@
 
 ## 核心能力
 
-- Docker 镜像只装软件环境；流程与 Web 代码运行时挂载
-- 可选 SPAdes、Unicycler（Illumina-only）、Shovill/SKESA、MEGAHIT，按选择顺序串行
-- 容器 cgroup 与主机读数取有效上限后按约 90% 分配 CPU/内存
-- CLI 与 Web 工作台；Web 支持分片上传、校验、排队、取消、部分完成与重新分析
+- Web：Flask + Postgres 步骤调度 + Redis/RQ（组装 Worker / QC Worker）；生信软件在工具侧车容器中运行（[docs/architecture.md](docs/architecture.md)、[docs/docker_tools.md](docs/docker_tools.md)）
+- 可选 SPAdes、Unicycler（Illumina-only）、Shovill/SKESA、MEGAHIT；默认组装串行，失败互不影响
+- 资源：工具参数约 90% 配额；容器另有 CPU/内存上限（内存为配额 + 1 GiB）
+- CLI（`run_pipeline.py`）与 Web；分片上传、校验、取消、部分完成与重新分析
 
 ## 分析流程
 
@@ -56,7 +56,7 @@ docker run --rm \
   --assembler megahit
 ```
 
-参数、资源与独立脚本见 [docs/usage.md](docs/usage.md)。Web 部署见 [docs/web_deployment.md](docs/web_deployment.md)。
+参数、资源与独立脚本见 [docs/usage.md](docs/usage.md)。部署见 [docs/docker_deployment.md](docs/docker_deployment.md) 与 [docs/web_deployment.md](docs/web_deployment.md)。
 
 ## 输入文件要求
 
@@ -86,11 +86,16 @@ docker run --rm \
 
 | 文档 | 内容 |
 | --- | --- |
+| [docs/architecture.md](docs/architecture.md) | 系统架构与调度 |
+| [docs/data_model.md](docs/data_model.md) | 数据存储模型 |
+| [docs/docker_deployment.md](docs/docker_deployment.md) | Compose 部署 |
+| [docs/docker_tools.md](docs/docker_tools.md) | 生信工具镜像 |
+| [docs/web_deployment.md](docs/web_deployment.md) | Web 账号与任务状态 |
+| [docs/developer_guide.md](docs/developer_guide.md) | 开发扩展 |
 | [docs/installation.md](docs/installation.md) | 镜像构建与环境 |
 | [docs/usage.md](docs/usage.md) | 命令行用法与资源 |
 | [docs/assembly_methods.md](docs/assembly_methods.md) | 组装方法与参数 |
 | [docs/output.md](docs/output.md) | 结果与指标 |
-| [docs/web_deployment.md](docs/web_deployment.md) | Web 部署与任务状态 |
 | [docs/security.md](docs/security.md) | 安全与数据清理 |
 | [docs/references.md](docs/references.md) | 软件文档链接 |
 | [CONTEXT.md](CONTEXT.md) | 领域术语 |

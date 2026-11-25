@@ -795,6 +795,7 @@ def process_next_job(app) -> bool:
                         stop_job_processes(
                             job["id"], process.pid, group_id, started_at, grace_seconds=1
                         )
+                        stop_tool_containers(job_id)
                         cancelled = True
                         break
                     time.sleep(0.2)
@@ -902,6 +903,43 @@ def process_next_job(app) -> bool:
     return True
 
 
+def stop_tool_containers(job_id: str) -> None:
+    try:
+        from scripts.docker_executor import get_executor, tool_runtime
+    except ImportError:
+        return
+    if tool_runtime() != "docker":
+        return
+    try:
+        get_executor().stop_job_containers(str(job_id))
+    except Exception as error:  # noqa: BLE001
+        print("Could not stop tool containers for {}: {}".format(job_id, error), file=sys.stderr)
+
+
+def cleanup_orphan_tool_containers(database: Path) -> None:
+    try:
+        from scripts.docker_executor import get_executor, tool_runtime
+    except ImportError:
+        return
+    if tool_runtime() != "docker":
+        return
+    active: set[str] = set()
+    try:
+        with connect(database) as db:
+            rows = db.execute(
+                "SELECT id FROM jobs WHERE status IN ('running', 'cancelling', 'queued')"
+            ).fetchall()
+            active = {str(row["id"]) for row in rows}
+    except sqlite3.Error:
+        return
+    try:
+        removed = get_executor().cleanup_orphans(active)
+        if removed:
+            print("Removed {} orphan tool container(s).".format(removed), flush=True)
+    except Exception as error:  # noqa: BLE001
+        print("Could not clean orphan tool containers: {}".format(error), file=sys.stderr)
+
+
 def main() -> int:
     app = create_app()
     lock_path = app.config["DATA_ROOT"] / "worker.lock"
@@ -912,6 +950,7 @@ def main() -> int:
             print("Another job worker already holds the queue lock.", file=sys.stderr)
             return 1
         recover_interrupted_jobs(app.config["DATABASE"])
+        cleanup_orphan_tool_containers(app.config["DATABASE"])
         print("Serial job worker started.", flush=True)
         while True:
             if not process_next_job(app):

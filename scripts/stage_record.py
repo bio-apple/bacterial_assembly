@@ -224,9 +224,17 @@ def build_progress(assemblers: list[str], record: dict, job_status: str) -> dict
 
 
 class StageRecord:
-    def __init__(self, path: Path, assemblers: list[str]):
+    def __init__(self, path: Path, assemblers: list[str], *, resume: bool = False):
         self.path = Path(path)
         self._lock = threading.Lock()
+        if resume and self.path.is_file():
+            loaded = load_stage_record(self.path)
+            if loaded.get("stages"):
+                self.data = {
+                    "updated_at": loaded.get("updated_at") or utc_now(),
+                    "stages": loaded["stages"],
+                }
+                return
         self.data = {
             "updated_at": utc_now(),
             "stages": planned_stages(list(assemblers)),

@@ -2,6 +2,8 @@
 
 工作台定位为「微生物 NGS 数据分析系统」。用户登录后进入 `/overview`，再从 `/modules` 进入细菌基因组组装模块。
 
+完整 Compose（Postgres、Redis、双 Worker、工具侧车）见 [docker_deployment.md](docker_deployment.md)。
+
 ## 前置条件
 
 Linux 服务器安装 Docker Engine、Docker Compose plugin、Nginx，并将本仓库放到服务器。
@@ -15,7 +17,7 @@ cp users.json.example users.json
 chmod 600 .env users.json
 ```
 
-在 `.env` 中设置 `ASSEMBLY_WEB_SECRET`、`ASSEMBLY_SESSION_COOKIE_SECURE`、`APP_UID`、`APP_GID`（密钥无默认值）。经本机 Nginx HTTPS 反代访问时保持 `ASSEMBLY_SESSION_COOKIE_SECURE=true`；若浏览器直接访问 `http://127.0.0.1:8000`，改为 `false`，否则会话 Cookie 可能无法发送。生成密码哈希：
+在 `.env` 中设置 `ASSEMBLY_WEB_SECRET`、`ASSEMBLY_SESSION_COOKIE_SECURE`、`APP_UID`、`APP_GID`、`POSTGRES_PASSWORD`、`DOCKER_GID` 等。经本机 Nginx HTTPS 反代访问时保持 `ASSEMBLY_SESSION_COOKIE_SECURE=true`；若浏览器直接访问 `http://127.0.0.1:8000`，改为 `false`。生成密码哈希：
 
 ```bash
 docker compose build
@@ -27,14 +29,7 @@ docker compose run --rm --entrypoint micromamba web \
 
 ## 启动
 
-```bash
-mkdir -p data
-sudo chown "$(id -u):$(id -g)" data
-docker compose up -d --build
-docker compose logs -f web worker
-```
-
-Compose 将仓库只读挂载到 `/opt/bacterial-assembly`。Web 端口绑定 `127.0.0.1:8000`。运行数据根目录是 `deploy/data/`（容器内 `/data`，`ASSEMBLY_DATA_ROOT`）：
+见 [docker_deployment.md](docker_deployment.md)。仓库只读挂载到 `/opt/bacterial-assembly`。Web 绑定 `127.0.0.1:8000`。数据根 `deploy/data/`（容器内 `/data`）：
 
 ```text
 data/
@@ -51,15 +46,15 @@ data/
   archive/
 ```
 
-浏览器分片上传的未完成字节在 `uploads/chunks/`；multipart 直传建任务时的短暂暂存在 `uploads/incoming/`；校验通过、尚未绑定任务的文件在 `uploads/validated/`。分析只读 `jobs/<任务编号>/input`。若数据根下仍有旧的 `jobs.sqlite3` 而 `database/jobs.sqlite3` 不存在，启动时会把旧库移过去，不删表。Compose 将 worker 固定为单实例（`container_name` + `deploy.replicas: 1`），运行时另用数据根上的 `worker.lock`；不要 `docker compose up --scale worker=N`。
+分片上传在 `uploads/chunks/`；直传暂存在 `uploads/incoming/`；校验通过待绑定在 `uploads/validated/`。分析只读 `jobs/<id>/input`。
 
 ## 上传与校验
 
-浏览器按 8 MiB 分片上传 R1/R2。上传库表状态为 `pending` / `uploading` / `completed` / `failed` / `consumed`（前端同一套枚举）：
+浏览器按 8 MiB 分片上传 R1/R2。上传库表状态为 `pending` / `uploading` / `completed` / `failed` / `consumed`：
 
 1. **字节校验**：SHA-256 与浏览器提交值一致  
-2. **记录校验**：`.gz` 完整 gzip 读取；ValidateFastq 0.1.1（退出码 0，且输出含 `no errors found`，不含 `Error found at readnumber`）→ 单文件可分析（`completed`）  
-3. **配对检查**：创建或重新分析前核对 R1/R2 数量与 read 编号；「可分析」不等于已配对  
+2. **记录校验**：`.gz` 完整 gzip；ValidateFastq（退出码 0，且输出含 `no errors found`）→ `completed`  
+3. **配对检查**：创建或重新分析前核对 R1/R2  
 
 任一步失败都不能启动组装。
 
@@ -75,14 +70,10 @@ data/
 | `cancelling` | 取消中 |
 | `cancelled` | 已取消 |
 
-全部组装方法成功为已完成；至少一种成功且至少一种失败为部分完成（可下载已有结果）；全部失败或前置失败为失败。用户请求取消后、进程未停妥为取消中；取消完成为已取消。可取消 `queued` 或 `running`；终态任务不可再取消。不为取消临时打包。
+全部组装方法成功为已完成；至少一种成功且至少一种失败为部分完成（可下载已有结果）。可取消 `queued` 或 `running`。任务状态描述整次分析；单方法成败见 `assembly_outcome.json` 与步骤记录。
 
-任务状态描述整次分析；单个组装方法成败写在 `assembly_outcome.json` 与步骤记录中。`job_steps`：终态任务上仍排队的步骤为 `skipped`；部分完成时仍运行的步骤为 `failed`。不提供单步重跑。
-
-`/history` 按账号隔离；可下载结果或日志，重新分析会新建任务。
+`/history` 按账号隔离；可下载结果或日志；重新分析会新建任务。
 
 ## 模块扩展
 
-`/modules` 由 `web/modules.py` 中的 `ANALYSIS_MODULES` 驱动。新增模块需先实现登录保护路由和页面，再登记模块 ID。页面沿用 `web/templates/components/` 中的组件。
-
-安全与数据清理见 [security.md](security.md)。术语见仓库根目录 [CONTEXT.md](../CONTEXT.md)。
+`/modules` 由 `web/modules.py` 中的 `ANALYSIS_MODULES` 驱动。安全与数据清理见 [security.md](security.md)。术语见 [CONTEXT.md](../CONTEXT.md)。
