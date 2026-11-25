@@ -6,15 +6,14 @@ fastp、四种组装软件和 QUAST 在独立工具容器中运行。应用进�
 
 | 工具 | 镜像 |
 | --- | --- |
-| fastp | `bacterial-assembly-fastp:0.23.4` |
-| SPAdes | `bacterial-assembly-spades:3.15.5` |
-| Unicycler（含 SPAdes 4.0.0） | `bacterial-assembly-unicycler:0.5.1` |
-| Shovill | `bacterial-assembly-shovill:1.4.2` |
-| MEGAHIT | `bacterial-assembly-megahit:1.2.9` |
-| QUAST | `bacterial-assembly-quast:5.2.0` |
+| fastp | `bacterial-assembly-fastp:latest` |
+| SPAdes | `bacterial-assembly-spades:latest` |
+| Unicycler（含 SPAdes） | `bacterial-assembly-unicycler:latest` |
+| Shovill | `bacterial-assembly-shovill:latest` |
+| MEGAHIT | `bacterial-assembly-megahit:latest` |
+| QUAST | `bacterial-assembly-quast:latest` |
 
-配置：`config/software_registry.yaml`（含 Unicycler `bundled_spades_label`）。
-
+配置：`config/software_registry.yaml`。基础镜像为 `anaconda/miniconda`（不钉 tag）；conda 包在 Dockerfile 中不钉版本；构建时取频道当前解。运行后的具体版本见任务 `versions.txt`。
 ## 构建
 
 平台由 `docker/lib/resolve-platform.sh` 解析（ADR 0019）：`--platform` > `PLATFORM` > 宿主机判定。支持：`linux/amd64`、`linux/arm64`。Dockerfile 不写死平台。
@@ -28,7 +27,7 @@ fastp、四种组装软件和 QUAST 在独立工具容器中运行。应用进�
 
 | 变量 | 含义 |
 | --- | --- |
-| `TOOL_RUNTIME` | `docker` 或 `local`（未设置时为 `local`；推荐部署为 `docker`） |
+| `TOOL_RUNTIME` | `docker` 或 `local`（未设置时为 `local`；生产 EnvironmentFile 为 `docker`） |
 | `_ASSEMBLY_JOB_ID` | 容器标签 `bacterial.assembly.job_id` |
 | `_ASSEMBLY_STEP_NAME` | 容器标签 `bacterial.assembly.step` |
 | `_ASSEMBLY_STEP_ID` | 写入 Postgres `job_steps.container_id` 的步骤主键 |

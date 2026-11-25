@@ -72,7 +72,7 @@ def main() -> int:
 
             label = load_registry().get("unicycler", {}).get(
                 "bundled_spades_label",
-                "bundled in bacterial-assembly-unicycler:0.5.1",
+                "bundled in bacterial-assembly-unicycler:latest",
             )
             line = "Unicycler SPAdes\t{}\n".format(label)
             with versions_path.open("a", encoding="utf-8") as versions_file:

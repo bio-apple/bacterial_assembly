@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Build all tool sidecar images. Platform: --platform > PLATFORM > host (ADR 0019).
+# Tags are :latest; conda package versions are not pinned in Dockerfiles (ADR 0010).
 set -Eeuo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 # shellcheck source=../lib/resolve-platform.sh
@@ -36,19 +37,18 @@ resolve_docker_platform "$PLATFORM_FLAG"
 
 build_one() {
   local name=$1
-  local tag=$2
   docker build --platform "$PLATFORM" \
-    -t "bacterial-assembly-${name}:${tag}" \
+    -t "bacterial-assembly-${name}:latest" \
     -f "$ROOT/docker/tools/${name}/Dockerfile" \
     "$ROOT/docker/tools/${name}"
 }
 
-build_one fastp 0.23.4
-build_one spades 3.15.5
-build_one unicycler 0.5.1
-build_one shovill 1.4.2
-build_one megahit 1.2.9
-build_one quast 5.2.0
+build_one fastp
+build_one spades
+build_one unicycler
+build_one shovill
+build_one megahit
+build_one quast
 
 echo "Built tool images (${PLATFORM}):"
 docker images 'bacterial-assembly-*'

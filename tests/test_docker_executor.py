@@ -81,9 +81,9 @@ class RegistryTests(unittest.TestCase):
     def setUp(self):
         clear_registry_cache()
 
-    def test_registry_loads_pinned_images(self):
+    def test_registry_loads_latest_images(self):
         tools = load_registry()
-        self.assertEqual(tools["fastp"]["image"], "bacterial-assembly-fastp:0.23.4")
+        self.assertEqual(tools["fastp"]["image"], "bacterial-assembly-fastp:latest")
         self.assertEqual(resolve_tool(["fastp", "--version"]), "fastp")
         self.assertEqual(resolve_tool(["spades.py", "-o", "/tmp"]), "spades")
         self.assertEqual(
@@ -157,7 +157,7 @@ class ExecutorTests(unittest.TestCase):
         ):
             self.executor.run_tool(command, "fastp filtering", self.log_path)
         self.assertIsNotNone(self.client.last_run)
-        self.assertEqual(self.client.last_run["image"], "bacterial-assembly-fastp:0.23.4")
+        self.assertEqual(self.client.last_run["image"], "bacterial-assembly-fastp:latest")
         self.assertEqual(self.client.last_run["command"][0], "fastp")
         self.assertEqual(self.client.last_run["nano_cpus"], 4_000_000_000)
         self.assertEqual(self.client.last_run["mem_limit"], 3 * 1024 ** 3)
@@ -229,7 +229,7 @@ class CommonDockerBridgeTests(unittest.TestCase):
                     "fastp",
                     log_path,
                 )
-        self.assertEqual(client.last_run["image"], "bacterial-assembly-fastp:0.23.4")
+        self.assertEqual(client.last_run["image"], "bacterial-assembly-fastp:latest")
 
 
 if __name__ == "__main__":

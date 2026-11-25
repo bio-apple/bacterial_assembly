@@ -110,12 +110,12 @@ check_docker() {
 check_tool_images() {
   local missing=0 img
   for img in \
-    bacterial-assembly-fastp:0.23.4 \
-    bacterial-assembly-spades:3.15.5 \
-    bacterial-assembly-unicycler:0.5.1 \
-    bacterial-assembly-shovill:1.4.2 \
-    bacterial-assembly-megahit:1.2.9 \
-    bacterial-assembly-quast:5.2.0
+    bacterial-assembly-fastp:latest \
+    bacterial-assembly-spades:latest \
+    bacterial-assembly-unicycler:latest \
+    bacterial-assembly-shovill:latest \
+    bacterial-assembly-megahit:latest \
+    bacterial-assembly-quast:latest
   do
     if ! docker image inspect "$img" >/dev/null 2>&1; then
       echo "missing image: $img" >&2

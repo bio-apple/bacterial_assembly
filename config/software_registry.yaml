@@ -1,28 +1,29 @@
 # Whitelist of bioinformatics tools runnable via TOOL_RUNTIME=docker.
 # Users cannot override image names or mounts.
+# Images use :latest; conda packages are unpinned at build time (ADR 0010).
 tools:
   fastp:
-    image: bacterial-assembly-fastp:0.23.4
+    image: bacterial-assembly-fastp:latest
     executables:
       - fastp
   spades:
-    image: bacterial-assembly-spades:3.15.5
+    image: bacterial-assembly-spades:latest
     executables:
       - spades.py
   unicycler:
-    image: bacterial-assembly-unicycler:0.5.1
-    bundled_spades_label: bundled in bacterial-assembly-unicycler:0.5.1
+    image: bacterial-assembly-unicycler:latest
+    bundled_spades_label: bundled in bacterial-assembly-unicycler:latest
     executables:
       - unicycler
   shovill:
-    image: bacterial-assembly-shovill:1.4.2
+    image: bacterial-assembly-shovill:latest
     executables:
       - shovill
   megahit:
-    image: bacterial-assembly-megahit:1.2.9
+    image: bacterial-assembly-megahit:latest
     executables:
       - megahit
   quast:
-    image: bacterial-assembly-quast:5.2.0
+    image: bacterial-assembly-quast:latest
     executables:
       - quast.py

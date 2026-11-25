@@ -1,4 +1,4 @@
-# 宿主机部署（推荐）
+# 宿主机部署
 
 Flask / Gunicorn / RQ Worker 跑在 Linux 宿主机；PostgreSQL 与 Redis 用系统包或外部实例；仅六个生信工具使用 Docker 镜像（ADR 0020）。
 
@@ -42,8 +42,6 @@ python3 -m venv /opt/bacterial-assembly/.venv
 /opt/bacterial-assembly/.venv/bin/pip install -r requirements-host.txt
 ```
 
-`requirements-host.txt` 与 `requirements-web.txt` 钉同一组 Web/Worker 依赖；不在宿主机安装 SPAdes/fastp/QUAST。
-
 ## 4. ValidateFastq（micromamba）
 
 ```bash
@@ -65,7 +63,7 @@ sudo chmod 600 /etc/bacterial-assembly/assembly.env
 # 编辑：ASSEMBLY_WEB_SECRET、DATABASE_URL、REDIS_URL、ASSEMBLY_DATA_ROOT 等
 ```
 
-沿用代码中的变量名（`ASSEMBLY_WEB_SECRET`、`ASSEMBLY_DATA_ROOT`、`TASK_BACKEND=postgres_rq`、`TOOL_RUNTIME=docker` 等）。**必须**为 `ASSEMBLY_DATA_ROOT` 设置宿主机绝对路径（工具容器同路径 bind）。
+变量名与代码一致（`ASSEMBLY_WEB_SECRET`、`ASSEMBLY_DATA_ROOT`、`TASK_BACKEND=postgres_rq`、`TOOL_RUNTIME=docker` 等）。`ASSEMBLY_DATA_ROOT` 须为宿主机绝对路径（工具容器同路径 bind）。
 
 账号文件：
 

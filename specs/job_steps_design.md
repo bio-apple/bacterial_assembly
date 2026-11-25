@@ -13,7 +13,7 @@
 - 表 `job_steps`：`job_id`、`step_name`、`status`、`started_at`、`completed_at`、`exit_code`、`error`，`(job_id, step_name)` 唯一。
 - `step_name` 只接受这次任务计划内的步骤编号，例如 `fastp`、`spades`、`spades:quast:original`、`comparison`。
 - 步骤状态只用 `queued`、`running`、`succeeded`、`failed`、`cancelled`、`skipped`。任务终态另有 `partial_success`，不是步骤状态。
-- 流程把阶段写在 `stages.json`。工作进程在任务收尾（及中断恢复）时把这份记录同步进表；打开任务只读库表，不再写库。已结束的步骤不会被改回排队。
+- `postgres_rq` 下步骤真源在 PostgreSQL；Web 经 `load_recorded_steps` 读取，并可投影到 SQLite。`stages.json` 可写入供排障。已结束的步骤不会被改回排队。
 - 任务已经结束而某步仍是排队，记为 `skipped`。任务为部分完成而某步仍是运行中，记为 `failed`。用户取消时，还在排队或进行中的步骤记为 `cancelled`。
 - 不提供单步重跑。
 

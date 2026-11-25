@@ -1,11 +1,12 @@
 # Build with an explicit --platform or rely on host detection (ADR 0019).
 # Supported: linux/amd64 | linux/arm64. Example: ./docker/tools/build.sh
-FROM anaconda/miniconda:26.9.4
+# Conda packages are unpinned; image tag is :latest (ADR 0010).
+FROM anaconda/miniconda
 ENV CONDA_PLUGINS_AUTO_ACCEPT_TOS=true \
     PYTHONDONTWRITEBYTECODE=1
 RUN conda install --yes --name base --channel conda-forge --channel bioconda \
-        quast=5.2.0 \
-        openjdk=8 \
+        quast \
+        openjdk \
     && conda clean --all --yes
 RUN useradd --create-home --uid 1000 --user-group tooluser
 USER tooluser

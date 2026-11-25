@@ -246,6 +246,7 @@ class RegistryBundledLabelTests(unittest.TestCase):
         entry = load_registry()["unicycler"]
         self.assertIn("bundled_spades_label", entry)
         self.assertIn("unicycler", entry["bundled_spades_label"])
+        self.assertIn(":latest", entry["image"])
 
 
 class JobPublishTests(unittest.TestCase):

@@ -23,22 +23,11 @@ CLI 退出码：全部成功 `0`，部分成功 `3`，全部失败或前置失�
 
 ## 支持的软件与版本
 
-生信工具在侧车镜像中运行（见 [docs/docker_tools.md](docs/docker_tools.md)）：
+生信工具在侧车镜像中运行（`bacterial-assembly-<tool>:latest`；见 [docs/docker_tools.md](docs/docker_tools.md)）。conda 包不钉版本；具体版本以任务 `versions.txt` 为准。工具包括：fastp、SPAdes、Unicycler（镜像内含 SPAdes）、Shovill/SKESA、MEGAHIT、QUAST。
 
-| 软件 | 版本 |
-| --- | --- |
-| fastp | 0.23.4 |
-| SPAdes | 3.15.5 |
-| Unicycler | 0.5.1（镜像内含 SPAdes 4.0.0） |
-| Shovill / SKESA | 1.4.2 / 2.5.1 |
-| MEGAHIT | 1.2.9 |
-| QUAST | 5.2.0 |
-
-宿主机：Flask 3.1.1、Gunicorn 23.0.0、ValidateFastq 0.1.1（micromamba）、OpenJDK 8。见 [docs/installation.md](docs/installation.md)。
+宿主机：Flask、Gunicorn、ValidateFastq（micromamba）、OpenJDK。见 [docs/installation.md](docs/installation.md)。
 
 ## 安装与快速开始
-
-推荐路径（宿主机 Web/Worker + 工具 Docker）：
 
 ```bash
 ./docker/tools/build.sh
@@ -91,7 +80,7 @@ python3 run_pipeline.py \
 | --- | --- |
 | [docs/architecture.md](docs/architecture.md) | 系统架构与调度 |
 | [docs/data_model.md](docs/data_model.md) | 数据存储模型 |
-| [docs/host_deployment.md](docs/host_deployment.md) | 宿主机部署（推荐） |
+| [docs/host_deployment.md](docs/host_deployment.md) | 宿主机部署 |
 | [docs/docker_tools.md](docs/docker_tools.md) | 生信工具镜像 |
 | [docs/web_deployment.md](docs/web_deployment.md) | Web 账号与任务状态 |
 | [docs/developer_guide.md](docs/developer_guide.md) | 开发扩展 |

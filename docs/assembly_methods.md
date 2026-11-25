@@ -13,7 +13,7 @@
 ## Unicycler
 
 - 脚本：`scripts/run_unicycler.py`
-- 运行环境：镜像中的 `unicycler`（含 SPAdes 4.0.0）
+- 运行环境：镜像 `bacterial-assembly-unicycler:latest`（含 SPAdes）
 - 仅 Illumina 短读：传入 `-1`/`-2`，不传长读参数 `-l`
 - 线程 / 内存：`-t`；通过 `--spades_options` 传入 `-m`
 - 成功时输出：`assemblies/unicycler/assembly.fasta`

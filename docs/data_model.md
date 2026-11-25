@@ -11,7 +11,7 @@
 
 Redis 只作 RQ 队列，不持久化业务状态。
 
-任务页步骤列表：磁盘 `stages.json` 同步到 SQLite `job_steps`；若表为空则由 `web/step_read_model` 读 PostgreSQL 补齐（见 CONTEXT「步骤读模型」）。
+任务页步骤列表：`postgres_rq` 下以 PostgreSQL 为真源（`web/step_read_model.load_recorded_steps`），并可投影到 SQLite（见 CONTEXT「步骤读模型」）。
 
 ## PostgreSQL
 
@@ -27,7 +27,7 @@ Schema：`migrations/*.sql`，应用：`python -m web.migrate_pg`。
 
 ## SQLite（Web）
 
-表定义见 `web/app.py` 中 `SCHEMA`（`jobs`、`job_steps`、`uploads`、`notices`、`samples`、`sequencing_batches`）。启动时用 `ensure_*` 做列/约束补齐。
+表定义见 `web/db_sqlite.py` 中 `SCHEMA`（`jobs`、`job_steps`、`uploads`、`notices`、`samples`、`sequencing_batches`）。启动时用 `ensure_*` 做列/约束补齐。
 
 ## 导入工具
 
@@ -38,4 +38,4 @@ Schema：`migrations/*.sql`，应用：`python -m web.migrate_pg`。
 python -m web.migrate_sqlite_to_postgres --sqlite /path/to/jobs.sqlite3
 ```
 
-要求已配置 `DATABASE_URL`，且已执行 `python -m web.migrate_pg`。
+`--dry-run` 只统计。目标库需已执行 `migrate_pg`。
