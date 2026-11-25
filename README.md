@@ -36,11 +36,13 @@ docker run --rm \
 
 输入支持 `.fastq`、`.fq` 及其 gzip 压缩文件。`--assembler` 可重复指定，取值为 `spades`、`unicycler`、`shovill`、`megahit`；至少指定一次，同一方法不可重复。所有选中的方法按 `--assembler` 顺序串行执行，共用同一份 fastp 过滤后 reads。某方法成功后，对其原始组装和非空的长度筛选结果分别运行 QUAST；空筛选结果跳过 QUAST。
 
-逻辑 CPU 与物理内存先读取容器 cgroup（v1 或 v2）的有效上限；读不到时回退到主机。总控按有效上限的 90% 计算配额（CPU 向下取整至少 1 个线程，内存按 GiB 向下取整至少 1 GiB），写入 `run.log`，并令 fastp 使用该线程数。各组装方法按同一规则取线程与内存：SPAdes 传入 `-t`/`-m`，Shovill 传入 `--cpus`/`--ram`，MEGAHIT 传入 `--num-cpu-threads` 与等量字节的 `--memory`，Unicycler 传入 `-t` 并通过 `--spades_options` 传入 `-m`。命令行、Web 表单和 API 均不接受手动线程数或内存上限。独立运行 QUAST 且环境中没有总控分配的线程数时，使用 `os.cpu_count()` 得到的逻辑 CPU 数（不经 cgroup 再裁剪）。
+资源上限不是「宿主机物理内存的 90%」单独决定。总控先取主机逻辑 CPU（`os.cpu_count()`）和主机物理内存（`sysconf`），再读取进程的 cgroup v1/v2：CPU 取 quota 与 cpuset 中更紧的限制，内存取 `memory.max` / `memory.limit_in_bytes`（无限标记视为无限制）。有效上限是主机读数与 cgroup 限制的更小值；读不到 cgroup 时回退到主机读数。再对有效上限取 90%（CPU 向下取整至少 1 线程，内存按 GiB 向下取整至少 1 GiB），写入 `run.log`。
+
+在总控流水线中：fastp 使用上述线程数（`--thread`），不单独再传内存上限；各组装方法按同一有效上限的 90% 取线程与内存——SPAdes `-t`/`-m`，Shovill `--cpus`/`--ram`，MEGAHIT `--num-cpu-threads` 与等量字节 `--memory`，Unicycler `-t` 与 `--spades_options -m`。命令行、Web 表单和 API 均不接受手动线程数或内存上限。独立运行 QUAST 且环境中没有总控分配的线程数时，使用 `os.cpu_count()`（不经 cgroup 再裁剪）。独立运行 fastp 且未由总控分配线程时，自行按上述 cgroup/主机规则取 90% CPU。
 
 `--spades-kmers` 与 `--spades-careful` 仅在选择 SPAdes 时生效；k-mer 为逗号分隔的奇数（最大 127），省略时用 SPAdes 默认值。Web worker 总会传入 `--job-id`；命令行可省略该参数并独立运行。
 
-某个组装方法失败不取消其余方法。流程在组装阶段结束或前置步骤异常时写出 `assembly_outcome.json`（临时文件后原子替换）：全部成功退出码 0，部分成功退出码 3，全部失败或 fastp 等前置失败退出码 1。Worker 核对声明中的状态与退出码，并确认每个成功方法都有非空 contig；不能只凭 `comparison.tsv` 是否存在。
+某个组装方法失败不取消其余方法。流程写出 `assembly_outcome.json`（临时文件后原子替换）：全部成功退出码 0；部分组装方法失败退出码 3；全部失败或 fastp 等前置失败退出码 1。CLI 的非零退出码表示流程未全部成功；Web 在核对声明、退出码与成功方法的非空 contig 后，将「部分方法成功」记为 `partial_success`（部分完成），**不会**仅因退出码非零就记为 `failed`。部分完成时可下载归档中已有结果：成功方法的 contig、对应 QUAST，以及仅含成功方法的 `comparison.tsv`（若有）。不能只凭 `comparison.tsv` 是否存在判定成功。
 
 ## 独立软件脚本
 
@@ -120,18 +122,29 @@ Web 工作台定位为「微生物 NGS 数据分析系统」。用户登录后�
 
 提交分析时选择样本名和至少一种组装方法。fastp 先运行一次，所选方法按选择顺序串行运行，并按上文资源规则取线程与内存。任务进入服务器端 FIFO 串行队列。
 
-任务状态标签：排队中、分析中、已完成、部分完成、失败、取消中、已取消（对应 `queued`、`running`、`succeeded`、`partial_success`、`failed`、`cancelling`、`cancelled`）。
+任务状态（`jobs.status`）与中文标签：
+
+| 英文 | 中文 |
+| --- | --- |
+| `queued` | 排队中 |
+| `running` | 分析中 |
+| `succeeded` | 已完成 |
+| `partial_success` | 部分完成 |
+| `failed` | 失败 |
+| `cancelling` | 取消中 |
+| `cancelled` | 已取消 |
 
 - 全部组装方法成功：`succeeded`
-- 至少一种成功且至少一种失败：`partial_success`（可下载已有结果）
+- 至少一种成功且至少一种失败：`partial_success`（部分完成；可下载已有结果，见上文）
 - 全部组装方法失败，或 fastp 等前置步骤失败：`failed`
-- 用户取消：`cancelled`
+- 用户请求取消后、进程尚未停妥：`cancelling`（取消中）
+- 取消完成：`cancelled`（已取消）
 
-`job_steps` 记录每个步骤。任务已终态而步骤仍排队时记为 `skipped`；任务为部分完成而步骤仍运行时记为 `failed`。不提供单步重跑。
+任务状态描述整次分析；单个组装方法是否成功写在 `assembly_outcome.json` 与 `job_steps` / `stages.json` 中，不要把某个组装方法的失败等同于整次任务失败。`job_steps` 在任务已终态而步骤仍排队时记为 `skipped`；任务为部分完成而步骤仍运行时记为 `failed`。不提供单步重跑。
 
 任务详情可在「原始组装 / >500 bp / >1000 bp」之间切换查看指标，不按 N50 排序或标出最优。fastp 的 HTML 报告可在新窗口打开，页面另有质控指标摘要。
 
-提交者可取消自己尚未结束的任务。已完成、部分完成、失败或已取消的任务不能再取消。取消后保留已有输出和日志，不为取消临时打包。
+提交者可取消自己尚未结束的任务（`queued` 或 `running`）。已完成、部分完成、失败或已取消的任务不能再取消。取消后保留已有输出和日志，不为取消临时打包。
 
 `/history` 按账号隔离显示任务；可下载结果或日志，并可重新分析（新建任务，不覆盖原任务）。
 
