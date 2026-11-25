@@ -39,7 +39,8 @@ CLI 退出码：全部成功 `0`，部分成功 `3`，全部失败或前置失�
 ## 安装与快速开始
 
 ```bash
-docker build --platform linux/amd64 -t bacterial-assembly:latest .
+# 构建平台默认跟宿主机；可 --platform / PLATFORM 覆盖（ADR 0019）
+./docker/build-app.sh
 
 docker run --rm \
   --user "$(id -u):$(id -g)" \
@@ -72,7 +73,7 @@ docker run --rm \
 
 ## 注意事项
 
-- 构建与运行建议 `--platform linux/amd64`（见 Dockerfile 注释）
+- 构建平台：`--platform` > `PLATFORM` > 宿主机判定；支持 `linux/amd64` 与 `linux/arm64`（ADR 0019）
 - 不要把宿主机物理内存直接当成容器可用内存；以 cgroup 有效上限为准
 - 命令行与 Web 均不提供手动线程数/内存参数
 - 部分组装方法失败时其余方法继续；Web 为部分完成，CLI 退出码为 3

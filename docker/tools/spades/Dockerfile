@@ -1,3 +1,5 @@
+# Build with an explicit --platform or rely on host detection (ADR 0019).
+# Supported: linux/amd64 | linux/arm64. Example: ./docker/tools/build.sh
 FROM anaconda/miniconda:26.9.4
 ENV CONDA_PLUGINS_AUTO_ACCEPT_TOS=true \
     PYTHONDONTWRITEBYTECODE=1

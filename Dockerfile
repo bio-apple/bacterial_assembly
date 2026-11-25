@@ -1,8 +1,8 @@
-# ValidateFastq 等依赖以 linux-64 为主。在 arm64 宿主机上请使用
-# docker build --platform linux/amd64。
+# Build via ./docker/build-app.sh (platform: --platform > PLATFORM > host; ADR 0019).
+# Supported: linux/amd64 | linux/arm64. Do not hardcode platform in Compose.
 FROM anaconda/miniconda:26.9.4
 
-# Compose 用 `micromamba run -n base` 启动。生信组装/评估在工具侧车镜像中运行（ADR 0010）。
+# Compose uses `micromamba run -n base`. Bioinformatics runs in tool sidecars (ADR 0010).
 ENV CONDA_PLUGINS_AUTO_ACCEPT_TOS=true \
     MAMBA_ROOT_PREFIX=/opt/miniconda3 \
     PYTHONDONTWRITEBYTECODE=1

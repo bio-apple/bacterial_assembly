@@ -16,15 +16,16 @@
 ## 启动
 
 ```bash
-# 仓库根目录：工具镜像
-PLATFORM=linux/amd64 ./docker/tools/build.sh
+# 仓库根目录：工具镜像（平台自动判定，可 --platform / PLATFORM 覆盖；ADR 0019）
+./docker/tools/build.sh
 
 cd deploy
 cp .env.example .env   # 填写 SECRET、POSTGRES_PASSWORD、DOCKER_GID 等
 mkdir -p data
 sudo chown "$(id -u):$(id -g)" data
 
-docker compose build
+# Compose 应用镜像（勿在 compose.yaml 写死平台）
+./build.sh
 docker compose run --rm --entrypoint micromamba web \
   run -n base python -m web.migrate_pg
 docker compose up -d

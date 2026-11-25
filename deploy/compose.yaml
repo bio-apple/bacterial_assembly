@@ -30,6 +30,8 @@ services:
     restart: unless-stopped
 
   web:
+    # Prefer ./deploy/build.sh (resolves platform per ADR 0019).
+    # Do not hardcode platform here.
     build:
       context: ..
     image: bacterial-assembly:latest

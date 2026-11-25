@@ -28,6 +28,7 @@ Flask / API
 - API 不执行生信软件，不等待容器结束。
 - 组装 Worker 与 QC Worker 独立进程，共享同一数据根。
 - 生信软件在白名单工具镜像中运行（见 [docker_tools.md](docker_tools.md)）；应用镜像不含组装/评估二进制。
+- 自建镜像构建平台由宿主机判定，可被 `--platform` / `PLATFORM` 覆盖；支持 `linux/amd64` 与 `linux/arm64`（见 ADR 0019）。
 
 ## 分析流程
 

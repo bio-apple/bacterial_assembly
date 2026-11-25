@@ -17,14 +17,12 @@ fastp、四种组装软件和 QUAST 在独立工具容器中运行。应用进�
 
 ## 构建
 
-```bash
-PLATFORM=linux/amd64 ./docker/tools/build.sh
-```
-
-应用镜像（Flask、编排、ValidateFastq；不含组装/评估二进制）：
+平台由 `docker/lib/resolve-platform.sh` 解析（ADR 0019）：`--platform` > `PLATFORM` > 宿主机判定。支持：`linux/amd64`、`linux/arm64`。Compose / Dockerfile 不写死平台。
 
 ```bash
-docker build --platform linux/amd64 -t bacterial-assembly:latest .
+./docker/tools/build.sh
+./docker/build-app.sh
+# 覆盖示例：./docker/tools/build.sh --platform linux/amd64
 ```
 
 ## 环境变量
