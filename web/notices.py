@@ -17,6 +17,7 @@ JOB_VERBS = {
     "running": "开始运行",
     "failed": "执行失败",
     "succeeded": "成功完成",
+    "partial_success": "部分完成",
     "cancelled": "已取消",
     "cancelling": "正在取消",
 }

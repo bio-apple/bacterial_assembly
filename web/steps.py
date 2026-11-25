@@ -9,7 +9,7 @@ FILE_STATUS = {
     "done": "succeeded",
     "failed": "failed",
 }
-TERMINAL_JOBS = ("succeeded", "failed", "cancelled")
+TERMINAL_JOBS = ("succeeded", "partial_success", "failed", "cancelled")
 TERMINAL_STEPS = ("succeeded", "failed", "cancelled", "skipped")
 
 
@@ -39,6 +39,8 @@ def step_status(file_state: str | None, job_status: str) -> str:
         return "cancelled"
     if job_status in TERMINAL_JOBS and status == "queued":
         return "skipped"
+    if job_status == "partial_success" and status == "running":
+        return "failed"
     if job_status in ("failed", "cancelled") and status == "running":
         return "failed" if job_status == "failed" else "cancelled"
     return status

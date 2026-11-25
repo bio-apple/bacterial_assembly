@@ -107,7 +107,7 @@
             {% if job.result_available %}
             <a class="history-result-download" href="{{ url_for('download_job', job_id=job.id) }}"
                aria-label="下载 {{ job.sample }} 的 {{ job.module_name }} 输出结果">
-              {% if job.status in ("failed", "cancelled") %}下载部分结果{% else %}下载输出结果{% endif %}
+              {% if job.status in ("partial_success", "failed", "cancelled") %}下载部分结果{% else %}下载输出结果{% endif %}
               <span aria-hidden="true">↓</span>
             </a>
             {% elif job.status == "cancelled" %}

@@ -210,7 +210,7 @@
       <button type="button" class="button button-cancel" id="cancel-job"{% if job.status not in ("queued", "running") %} hidden{% endif %}>取消任务</button>
       <a id="result-download" class="button button-download" {% if not job.archive_available %}hidden{% endif %}
          href="{{ url_for('download_job', job_id=job.id) }}">
-        {{ "下载部分结果" if job.status in ("failed", "cancelled") else "下载分析结果" }}
+        {{ "下载部分结果" if job.status in ("partial_success", "failed", "cancelled") else "下载分析结果" }}
       </a>
       {% if detail.inputs_available %}
       <button type="button" class="history-rerun" id="rerun-job" data-rerun-job="{{ job.id }}">重新分析</button>

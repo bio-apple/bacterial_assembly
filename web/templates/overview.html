@@ -56,6 +56,12 @@
         <span>已完成</span>
         <strong>{{ counts.succeeded }}</strong>
       </div>
+      {% if counts.partial_success %}
+      <div class="census-item">
+        <span>部分完成</span>
+        <strong>{{ counts.partial_success }}</strong>
+      </div>
+      {% endif %}
       <div class="census-item{% if counts.failed %} census-failed{% endif %}">
         <span>失败</span>
         <strong>{{ counts.failed }}</strong>
@@ -108,7 +114,7 @@
               <span>{{ job.module_name }}</span>
             </div>
             <a href="{{ url_for('download_job', job_id=job.id) }}">
-              {{ "下载部分结果" if job.status in ("failed", "cancelled") else "下载结果" }} ↓
+              {{ "下载部分结果" if job.status in ("partial_success", "failed", "cancelled") else "下载结果" }} ↓
             </a>
           </li>
           {% endfor %}

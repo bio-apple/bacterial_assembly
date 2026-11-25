@@ -16,11 +16,13 @@ from scripts.common import (
     cpu_share,
     logical_cpu_count,
     memory_share_gib,
+    physical_memory_bytes,
     prepare_output_dir,
     report_script_error,
     validate_reads,
     validate_sample,
 )
+from scripts.resource_limits import allocation_log, combine_cpu, combine_memory, read_cgroup
 from scripts.run_spades import parse_kmers
 from scripts.stage_record import QUAST_EVALUATIONS, StageRecord, quast_stage_id
 
@@ -324,6 +326,13 @@ def run_assembler(
     return assembler, True
 
 
+def write_outcome(outdir: Path, status: str) -> None:
+    (outdir / "assembly_outcome.json").write_text(
+        json.dumps({"status": status}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
 def merge_method_versions(
     assemblers: list[str], log_dir: Path, versions_path: Path
 ) -> None:
@@ -342,9 +351,24 @@ def main() -> int:
     if (args.spades_kmers or args.spades_careful) and "spades" not in args.assembler:
         parser.error("--spades-kmers and --spades-careful require --assembler spades")
     cpu_count = logical_cpu_count()
-    method_threads = cpu_share(cpu_count)
     try:
-        method_memory_gib = memory_share_gib()
+        detected = read_cgroup(
+            Path("/proc/self/cgroup").read_text(encoding="utf-8", errors="replace"),
+            Path("/sys/fs/cgroup"),
+        )
+    except OSError:
+        detected = {"quota_cpus": None, "cpuset_cpus": None, "memory_bytes": None, "generation": None}
+    cpu_limit, cpu_source = combine_cpu(cpu_count, detected["quota_cpus"], detected["cpuset_cpus"])
+    if detected["generation"] and cpu_source == "cgroup":
+        cpu_source = detected["generation"]
+    method_threads = cpu_share(cpu_limit)
+    try:
+        memory_limit, memory_source = combine_memory(
+            physical_memory_bytes(), detected["memory_bytes"]
+        )
+        if detected["generation"] and memory_source == "cgroup":
+            memory_source = detected["generation"]
+        method_memory_gib = memory_share_gib(memory_limit)
     except RuntimeError as error:
         parser.error(str(error))
     try:
@@ -377,17 +401,20 @@ def main() -> int:
     versions_path.write_text("", encoding="utf-8")
     append_log(
         log_path,
-        "Sample: {}\nR1: {}\nR2: {}\nResults: {}\n"
-        "Logical CPUs: {}\nThreads per method: {}\n"
-        "Memory per method: {} GiB\n"
-        "Assembly methods: serial in selection order".format(
+        "Sample: {}\nR1: {}\nR2: {}\nResults: {}\n{}".format(
             args.sample,
             args.r1,
             args.r2,
             outdir,
-            cpu_count,
-            method_threads,
-            method_memory_gib,
+            allocation_log(
+                cpu_count,
+                cpu_limit,
+                cpu_source,
+                memory_limit,
+                memory_source,
+                method_threads,
+                method_memory_gib,
+            ),
         ),
     )
 
@@ -410,7 +437,7 @@ def main() -> int:
             ],
             log_path,
             versions_path,
-            thread_count=cpu_count,
+            thread_count=method_threads,
         )
         stages.finish("fastp", exit_code=0)
 
@@ -450,15 +477,27 @@ def main() -> int:
                 detail="没有成功的组装方法，未写比较汇总",
                 exit_code=0,
             )
+        if not successful:
+            outcome = "failed"
+        elif failed:
+            outcome = "partial_success"
+        else:
+            outcome = "succeeded"
+        write_outcome(outdir, outcome)
         if failed:
-            return report_script_error(
+            report_script_error(
                 RuntimeError(
                     "assembler methods failed: {}".format(", ".join(failed))
                 ),
                 log_path,
             )
+            return 1 if outcome == "failed" else 3
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
         stages.fail_running(str(error))
+        try:
+            write_outcome(outdir, "failed")
+        except OSError:
+            pass
         return report_script_error(error, log_path)
 
     print("Pipeline complete: {}".format(outdir))

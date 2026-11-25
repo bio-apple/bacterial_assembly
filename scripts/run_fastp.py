@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -9,6 +10,7 @@ if __package__:
         add_output_arguments,
         add_read_arguments,
         assigned_threads,
+        cpu_share,
         prepare_output_dir,
         record_version,
         report_script_error,
@@ -22,6 +24,7 @@ else:
         add_output_arguments,
         add_read_arguments,
         assigned_threads,
+        cpu_share,
         prepare_output_dir,
         record_version,
         report_script_error,
@@ -38,7 +41,7 @@ def main() -> int:
     add_output_arguments(parser)
     parser.add_argument("--sample", default="sample")
     args = parser.parse_args()
-    threads = assigned_threads()
+    threads = assigned_threads() if os.environ.get("_ASSEMBLY_ASSIGNED_THREADS") else cpu_share()
     outdir = Path(args.outdir)
     log_path, versions_path = reporting_paths(args, outdir)
     try:

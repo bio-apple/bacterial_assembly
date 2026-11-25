@@ -167,7 +167,7 @@
     }
     if (download) {
       download.hidden = !job.archive_available;
-      download.textContent = job.status === "failed" || job.status === "cancelled"
+      download.textContent = job.status === "partial_success" || job.status === "failed" || job.status === "cancelled"
         ? "下载部分结果"
         : "下载分析结果";
     }

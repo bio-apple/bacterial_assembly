@@ -43,16 +43,17 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-TERMINAL_STATUSES = ("succeeded", "failed", "cancelled")
+TERMINAL_STATUSES = ("succeeded", "partial_success", "failed", "cancelled")
 ALLOWED_TRANSITIONS = {
     "running": ("queued",),
     "cancelling": ("running",),
     "succeeded": ("running",),
+    "partial_success": ("running",),
     "failed": ("running",),
     "cancelled": ("queued", "running", "cancelling"),
 }
 STATUS_LINE = re.compile(
-    r"^STATUS: (queued|running|cancelling|cancelled|succeeded|failed)\s*$",
+    r"^STATUS: (queued|running|cancelling|cancelled|succeeded|partial_success|failed)\s*$",
     re.MULTILINE,
 )
 
@@ -492,7 +493,7 @@ def recover_interrupted_jobs(database: Path) -> None:
 def reconcile_terminal_logs(database: Path) -> None:
     with connect(database) as db:
         rows = db.execute(
-            "SELECT status, log_path FROM jobs WHERE status IN ('succeeded', 'failed', 'cancelled')"
+            "SELECT status, log_path FROM jobs WHERE status IN ('succeeded', 'partial_success', 'failed', 'cancelled')"
         ).fetchall()
     for row in rows:
         if last_logged_status(row["log_path"]) == row["status"]:
@@ -609,12 +610,12 @@ def transition_job(database: Path, job_id: str, status: str, expect: tuple[str, 
         )
         if updated.rowcount != 1:
             return False
-        if status in ("succeeded", "failed", "cancelled", "cancelling", "running"):
+        if status in ("succeeded", "partial_success", "failed", "cancelled", "cancelling", "running"):
             row = db.execute(
                 "SELECT owner, sample FROM jobs WHERE id = ?",
                 (job_id,),
             ).fetchone()
-            if row and status in ("succeeded", "failed", "cancelled"):
+            if row and status in ("succeeded", "partial_success", "failed", "cancelled"):
                 note_job(db, row["owner"], row["sample"], job_id, status)
         return True
 
@@ -683,6 +684,62 @@ def _stages(pipeline_output_dir: Path | None):
     return load_stage_record(pipeline_output_dir / "stages.json").get("stages") or []
 
 
+def build_pipeline_command(
+    pipeline,
+    job_id: str,
+    r1,
+    r2,
+    outdir,
+    sample: str,
+    assemblers: list[str],
+    spades_kmers: str | None,
+    spades_careful: bool,
+) -> list[str]:
+    command = [
+        sys.executable,
+        str(pipeline),
+        "--r1",
+        str(r1),
+        "--r2",
+        str(r2),
+        "--outdir",
+        str(outdir),
+        "--sample",
+        sample,
+        "--job-id",
+        str(uuid.UUID(str(job_id))),
+    ]
+    for assembler in assemblers:
+        command.extend(["--assembler", assembler])
+    if "spades" in assemblers and spades_kmers:
+        command.extend(["--spades-kmers", spades_kmers])
+    if "spades" in assemblers and spades_careful:
+        command.append("--spades-careful")
+    return command
+
+
+def finished_status(returncode, pipeline_output_dir: Path | None) -> str:
+    recorded = None
+    if pipeline_output_dir is not None:
+        path = pipeline_output_dir / "assembly_outcome.json"
+        try:
+            if path.is_file() and not path.is_symlink():
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    recorded = payload.get("status")
+        except (OSError, json.JSONDecodeError):
+            recorded = None
+    if recorded == "partial_success":
+        return "partial_success"
+    if recorded == "failed":
+        return "failed"
+    if recorded == "succeeded" and returncode == 0:
+        return "succeeded"
+    if returncode == 0:
+        return "succeeded"
+    return "failed"
+
+
 def failure_message(returncode, error, log_path, pipeline_output_dir, partial: bool) -> str:
     _code, message = explain_job_failure(
         returncode,
@@ -704,6 +761,7 @@ def process_next_job(app) -> bool:
     pipeline_output_dir = None
     cancelled = False
     returncode = None
+    unfinished_archive = None
     remember_low_disk(app, job)
     try:
         output_dir = contained_path(data_root, job["output_dir"])
@@ -717,26 +775,17 @@ def process_next_job(app) -> bool:
         if not publish:
             pipeline_output_dir.mkdir(parents=True, exist_ok=True)
         assemblers = json.loads(job["assemblers"])
-        command = [
-            sys.executable,
-            str(app.config["PIPELINE_PATH"]),
-            "--r1",
-            str(input_r1),
-            "--r2",
-            str(input_r2),
-            "--outdir",
-            str(pipeline_output_dir),
-            "--sample",
-            job["sample"],
-            "--job-id",
+        command = build_pipeline_command(
+            app.config["PIPELINE_PATH"],
             job_id,
-        ]
-        for assembler in assemblers:
-            command.extend(["--assembler", assembler])
-        if "spades" in assemblers and job["spades_kmers"]:
-            command.extend(["--spades-kmers", job["spades_kmers"]])
-        if "spades" in assemblers and job["spades_careful"]:
-            command.append("--spades-careful")
+            input_r1,
+            input_r2,
+            pipeline_output_dir,
+            job["sample"],
+            assemblers,
+            job["spades_kmers"],
+            bool(job["spades_careful"]),
+        )
 
         returncode = None
         group_id = None
@@ -805,6 +854,7 @@ def process_next_job(app) -> bool:
         )
         archive_path.parent.mkdir(parents=True, exist_ok=True)
         partial_archive = archive_path.with_name(archive_path.name + ".partial")
+        unfinished_archive = partial_archive
         partial_archive.unlink(missing_ok=True)
         with tarfile.open(partial_archive, "w:gz") as archive:
             archive.add(
@@ -817,16 +867,24 @@ def process_next_job(app) -> bool:
             partial_archive.unlink(missing_ok=True)
             raise RuntimeError("archive was not written")
         partial_archive.replace(archive_path)
+        unfinished_archive = None
+        final_status = finished_status(returncode, archived_dir)
         published = update_job(
             app.config["DATABASE"],
             job["id"],
-            "succeeded" if returncode == 0 else "failed",
+            final_status,
             archive_path=str(archive_path),
             worker_pid=None,
             error=(
                 None
-                if returncode == 0
-                else failure_message(returncode, None, log_path, pipeline_output_dir, True)
+                if final_status == "succeeded"
+                else failure_message(
+                    returncode,
+                    None,
+                    log_path,
+                    pipeline_output_dir,
+                    final_status == "partial_success" or partial_output_available,
+                )
             ),
         )
         if not published:
@@ -836,6 +894,11 @@ def process_next_job(app) -> bool:
                     app.config["DATABASE"], job["id"], log_path, pipeline_output_dir
                 )
     except Exception as error:
+        if unfinished_archive is not None:
+            try:
+                unfinished_archive.unlink(missing_ok=True)
+            except OSError:
+                pass
         if cancelled or cancellation_requested(app.config["DATABASE"], job["id"]):
             finalize_cancelled(
                 app.config["DATABASE"], job["id"], log_path, pipeline_output_dir

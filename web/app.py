@@ -61,21 +61,27 @@ from web.errors import (
     UPLOAD_FAILED,
     parameter_message,
 )
-from web.fastq_check import FastqCheckUnavailable, FastqRecordError, check_fastq_records
+from web.fastq_check import (
+    FastqCheckUnavailable,
+    FastqRecordError,
+    check_fastq_records,
+    check_read_pair,
+)
 from web.host_monitor import format_bytes, snapshot
 from web.modules import ANALYSIS_MODULES, BACTERIAL_ASSEMBLY_MODULE_ID, group_enabled_modules
 from web.notices import note_disk, note_job
 from web.steps import step_rows, sync_job_steps
 
 ASSEMBLERS = ("spades", "unicycler", "shovill", "megahit")
-JOB_STATUSES = ("queued", "running", "cancelling", "cancelled", "succeeded", "failed")
-FINISHED_STATUSES = ("succeeded", "failed", "cancelled")
+JOB_STATUSES = ("queued", "running", "cancelling", "cancelled", "succeeded", "partial_success", "failed")
+FINISHED_STATUSES = ("succeeded", "partial_success", "failed", "cancelled")
 JOB_STATUS_LABELS = {
     "queued": "排队中",
     "running": "分析中",
     "cancelling": "取消中",
     "cancelled": "已取消",
     "succeeded": "已完成",
+    "partial_success": "部分完成",
     "failed": "失败",
     "skipped": "未执行",
 }
@@ -98,7 +104,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     id TEXT NOT NULL UNIQUE,
     owner TEXT NOT NULL,
     module_id TEXT NOT NULL DEFAULT 'bacterial-assembly',
-    status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'cancelling', 'cancelled', 'succeeded', 'failed')),
+    status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'cancelling', 'cancelled', 'succeeded', 'partial_success', 'failed')),
     assemblers TEXT NOT NULL,
     threads INTEGER NOT NULL,
     sample TEXT NOT NULL,
@@ -343,6 +349,42 @@ def ensure_cancellation_schema(db: sqlite3.Connection) -> None:
     )
 
 
+def ensure_partial_success_status(db: sqlite3.Connection) -> None:
+    row = db.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'"
+    ).fetchone()
+    if row is None or (row[0] and "partial_success" in row[0]):
+        return
+    db.execute("ALTER TABLE jobs RENAME TO jobs_before_partial_success")
+    start = SCHEMA.index("CREATE TABLE IF NOT EXISTS jobs")
+    end = SCHEMA.index("CREATE INDEX IF NOT EXISTS jobs_owner_sequence")
+    db.execute(SCHEMA[start:end].replace("IF NOT EXISTS ", "").strip().rstrip(";"))
+    old_columns = [
+        info[1] for info in db.execute("PRAGMA table_info(jobs_before_partial_success)")
+    ]
+    new_columns = [info[1] for info in db.execute("PRAGMA table_info(jobs)")]
+    shared = [name for name in new_columns if name in old_columns]
+    column_list = ", ".join(shared)
+    db.execute(
+        "INSERT INTO jobs ({columns}) SELECT {columns} FROM jobs_before_partial_success".format(
+            columns=column_list
+        )
+    )
+    db.execute("DROP TABLE jobs_before_partial_success")
+    db.executescript(
+        "CREATE INDEX IF NOT EXISTS jobs_owner_sequence ON jobs(owner, sequence DESC);"
+        "CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(status, sequence);"
+    )
+    maximum = db.execute("SELECT MAX(sequence) FROM jobs").fetchone()[0] or 0
+    existing = db.execute(
+        "SELECT 1 FROM sqlite_sequence WHERE name = 'jobs'"
+    ).fetchone()
+    if existing:
+        db.execute("UPDATE sqlite_sequence SET seq = ? WHERE name = 'jobs'", (maximum,))
+    else:
+        db.execute("INSERT INTO sqlite_sequence (name, seq) VALUES ('jobs', ?)", (maximum,))
+
+
 def ensure_rerun_column(db: sqlite3.Connection) -> None:
     columns = {info[1] for info in db.execute("PRAGMA table_info(jobs)")}
     if "rerun_of" not in columns:
@@ -479,6 +521,7 @@ def create_app(test_config: dict | None = None) -> Flask:
                 "CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(status, sequence);"
             )
         ensure_cancellation_schema(db)
+        ensure_partial_success_status(db)
         ensure_rerun_column(db)
         ensure_sample_columns(db)
         ensure_lifecycle_columns(db)
@@ -574,7 +617,10 @@ def create_app(test_config: dict | None = None) -> Flask:
             return fail("upload_incomplete", text, 400)
         if "分片" in text:
             return fail("upload_failed", "文件上传错误。{}".format(text), 400)
-        if "记录无法通过检查" in text:
+        if any(
+            phrase in text
+            for phrase in ("记录无法通过检查", "数量不一致", "read 编号", "gzip")
+        ):
             return fail("fastq_invalid", text, 400)
         if "empty" in text.lower() or "FASTQ" in text:
             return fail("fastq_invalid", FASTQ_EMPTY, 400)
@@ -777,14 +823,15 @@ def create_app(test_config: dict | None = None) -> Flask:
         counts = {
             status: 0
             for status in (
-                "queued",
-                "running",
-                "cancelling",
-                "cancelled",
-                "succeeded",
-                "failed",
-            )
-        }
+            "queued",
+            "running",
+            "cancelling",
+            "cancelled",
+            "succeeded",
+            "partial_success",
+            "failed",
+        )
+    }
         for row in count_rows:
             if row["status"] in counts:
                 counts[row["status"]] = row["total"]
@@ -961,7 +1008,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             ).fetchall()
             comparable_rows = db.execute(
                 "SELECT id, sample, status, output_dir, created_at FROM jobs "
-                "WHERE owner = ? AND status IN ('succeeded', 'failed', 'cancelled') "
+                "WHERE owner = ? AND status IN ('succeeded', 'partial_success', 'failed', 'cancelled') "
                 "ORDER BY sequence DESC",
                 (owner,),
             ).fetchall()
@@ -1226,7 +1273,11 @@ def create_app(test_config: dict | None = None) -> Flask:
                 )
             return fail("checksum_mismatch", "SHA-256 校验不一致。", 400)
         try:
-            check_fastq_records(staged, app.config.get("FASTQ_CHECK_COMMAND"))
+            check_fastq_records(
+                staged,
+                app.config.get("FASTQ_CHECK_COMMAND"),
+                log_dir=app.config["TEMP_ROOT"] / "fastq-checks" / row["id"],
+            )
         except FastqRecordError as error:
             staged.unlink(missing_ok=True)
             with connection() as db:
@@ -1411,7 +1462,11 @@ def create_app(test_config: dict | None = None) -> Flask:
                 ):
                     raise ValueError("FASTQ uploads cannot be empty.")
                 for incoming in incoming_paths:
-                    check_fastq_records(incoming, app.config.get("FASTQ_CHECK_COMMAND"))
+                    check_fastq_records(
+                        incoming,
+                        app.config.get("FASTQ_CHECK_COMMAND"),
+                        log_dir=app.config["TEMP_ROOT"] / "fastq-checks" / job_id,
+                    )
                 validated_dir.mkdir(parents=True)
                 for source, destination in zip(incoming_paths, validated_paths):
                     relocate_file(source, destination)
@@ -1421,6 +1476,12 @@ def create_app(test_config: dict | None = None) -> Flask:
                 for source, destination in zip(validated_paths, input_paths):
                     relocate_file(source, destination)
                 validated_dir.rmdir()
+            pair_log = app.config["TEMP_ROOT"] / "fastq-checks" / job_id
+            check_read_pair(input_paths[0], input_paths[1], pair_log)
+            for name in ("fastq_pair.log", "fastq_pair.json"):
+                source = pair_log / name
+                if source.is_file():
+                    relocate_file(source, logs_dir / name)
             log_path.write_text(
                 "MODULE: {}\nSTATUS: queued\n".format(BACTERIAL_ASSEMBLY_MODULE_ID),
                 encoding="utf-8",
@@ -1517,7 +1578,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             if row is None:
                 abort(404)
             status = row["status"]
-            if status in ("succeeded", "failed", "cancelled", "cancelling"):
+            if status in ("succeeded", "partial_success", "failed", "cancelled", "cancelling"):
                 return fail("cancel_rejected", "这个任务已经不能取消。", 409)
             if status == "queued":
                 updated = db.execute(
@@ -1544,7 +1605,7 @@ def create_app(test_config: dict | None = None) -> Flask:
                     (job_id, session["username"]),
                 ).fetchone()
                 status = row["status"] if row else None
-                if status in ("succeeded", "failed", "cancelled", "cancelling"):
+                if status in ("succeeded", "partial_success", "failed", "cancelled", "cancelling"):
                     return fail("cancel_rejected", "这个任务已经不能取消。", 409)
             updated = db.execute(
                 "UPDATE jobs SET cancel_requested = 1, cancel_requested_at = ?, updated_at = ? "
@@ -1738,6 +1799,12 @@ def create_app(test_config: dict | None = None) -> Flask:
             for directory in (input_dir, job_dir / "work", output_dir, log_path.parent):
                 directory.mkdir(parents=True)
             input_r1, input_r2 = copy_job_inputs(row, input_dir)
+            pair_log = app.config["TEMP_ROOT"] / "fastq-checks" / str(uuid.uuid4())
+            check_read_pair(input_r1, input_r2, pair_log)
+            for name in ("fastq_pair.log", "fastq_pair.json"):
+                source = pair_log / name
+                if source.is_file():
+                    relocate_file(source, log_path.parent / name)
             log_path.write_text(
                 "MODULE: {}\nSTATUS: queued\nRERUN OF: {}\n".format(row["module_id"], row["id"]),
                 encoding="utf-8",

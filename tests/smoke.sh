@@ -290,7 +290,7 @@ for line in Path(sys.argv[1]).read_text().splitlines():
     name, *args = shlex.split(line)
     if name == "fastp":
         observed = args[args.index("--thread") + 1]
-        assert observed == str(cpus), (name, observed, cpus)
+        assert observed == expected_method_threads, (name, observed, expected_method_threads)
         continue
     elif name == "spades":
         observed = args[args.index("-t") + 1]
@@ -422,7 +422,7 @@ for line in Path(sys.argv[1]).read_text().splitlines():
     name, *args = shlex.split(line)
     if name == "fastp":
         observed = args[args.index("--thread") + 1]
-        expected = full_threads
+        expected = method_threads
     elif name == "spades":
         observed = args[args.index("-t") + 1]
         expected = method_threads

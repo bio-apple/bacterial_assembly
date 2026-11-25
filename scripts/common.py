@@ -21,8 +21,19 @@ def logical_cpu_count() -> int:
     return os.cpu_count() or 1
 
 
+def _load_limit(name: str):
+    try:
+        from scripts import resource_limits
+    except ImportError:
+        import resource_limits
+    return getattr(resource_limits, name)
+
+
 def cpu_share(cpu_count: int | None = None) -> int:
-    available = logical_cpu_count() if cpu_count is None else cpu_count
+    if cpu_count is None:
+        available = _load_limit("limited_cpu_count")(logical_cpu_count())
+    else:
+        available = cpu_count
     if available < 1:
         raise ValueError("cpu_count must be positive")
     return max(1, (available * 9) // 10)
@@ -40,7 +51,10 @@ def physical_memory_bytes() -> int:
 
 
 def memory_share_gib(total_bytes: int | None = None) -> int:
-    total = physical_memory_bytes() if total_bytes is None else total_bytes
+    if total_bytes is None:
+        total = _load_limit("limited_memory_bytes")(physical_memory_bytes())
+    else:
+        total = total_bytes
     if total < 1:
         raise RuntimeError("system memory is unavailable")
     return max(1, (total * 9) // 10 // (1024 ** 3))

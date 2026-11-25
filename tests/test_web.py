@@ -1,4 +1,5 @@
 import errno
+import gzip
 import hashlib
 import io
 import json
@@ -19,6 +20,16 @@ from pathlib import Path
 from unittest.mock import patch
 
 os.environ["ASSEMBLY_WEB_AUTOCREATE"] = "0"
+
+PAIR_R1 = b"@pair/1\nACGT\n+\nIIII\n"
+PAIR_R2 = b"@pair/2\nTGCA\n+\nIIII\n"
+
+
+def gz(payload: bytes) -> bytes:
+    buffer = io.BytesIO()
+    with gzip.GzipFile(fileobj=buffer, mode="wb", mtime=0) as handle:
+        handle.write(payload)
+    return buffer.getvalue()
 
 _PROCESS_TEMP = tempfile.gettempdir()
 
@@ -104,8 +115,8 @@ class WebWorkbenchTests(unittest.TestCase):
                 "assembler_order": json.dumps(list(order)),
                 "assembler": list(order),
                 "sample": "isolate_17",
-                "r1": (io.BytesIO(b"@r1\nACGT\n+\nIIII\n"), "reads_R1.fastq.gz"),
-                "r2": (io.BytesIO(b"@r2\nTGCA\n+\nIIII\n"), "reads_R2.fastq.gz"),
+                "r1": (io.BytesIO(gz(PAIR_R1)), "reads_R1.fastq.gz"),
+                "r2": (io.BytesIO(gz(PAIR_R2)), "reads_R2.fastq.gz"),
             },
             headers={"X-CSRF-Token": token},
             content_type="multipart/form-data",
@@ -575,7 +586,7 @@ class WebWorkbenchTests(unittest.TestCase):
         ), patch(
             "run_pipeline.logical_cpu_count", return_value=2
         ), patch("sys.argv", argv):
-            self.assertEqual(run_pipeline.main(), 1)
+            self.assertEqual(run_pipeline.main(), 3)
 
         record = json.loads((outdir / "stages.json").read_text(encoding="utf-8"))
         by_id = {stage["id"]: stage for stage in record["stages"]}
@@ -741,7 +752,7 @@ class WebWorkbenchTests(unittest.TestCase):
         token = self.login(self.client)
         self.use_small_chunks()
         payload = b"ABCDEFGH1234"
-        created = self.post_upload(self.client, token, "reads_R1.fq.gz", "r1", len(payload))
+        created = self.post_upload(self.client, token, "reads_R1.fq", "r1", len(payload))
         upload_id = created.json["upload"]["id"]
         first = self.put_chunk(self.client, token, upload_id, 0, payload[:8])
         self.assertEqual(first.status_code, 200)
@@ -762,7 +773,7 @@ class WebWorkbenchTests(unittest.TestCase):
         )
         self.assertEqual(done.status_code, 200, done.get_json())
         self.assertEqual(
-            (self.app.config["UPLOAD_VALIDATED"] / upload_id / "read.fq.gz").read_bytes(),
+            (self.app.config["UPLOAD_VALIDATED"] / upload_id / "read.fq").read_bytes(),
             payload,
         )
         self.assertFalse((self.app.config["STAGING_ROOT"] / upload_id).exists())
@@ -859,8 +870,8 @@ class WebWorkbenchTests(unittest.TestCase):
         self.assertIn("等待上传".encode(), page.data)
         self.assertIn("继续上传".encode(), page.data)
         self.assertNotIn("可以开始分析".encode(), page.data)
-        left = b"@r1\nACGTAAAA\n+\nIIIIIIII\n"
-        right = b"@r2\nTGCAAAAA\n+\nIIIIIIII\n"
+        left = gz(b"@pair/1\nACGTAAAA\n+\nIIIIIIII\n")
+        right = b"@pair/2\nTGCAAAAA\n+\nIIIIIIII\n"
         r1 = self.store_chunks(self.client, token, "reads_R1.fastq.gz", "r1", left)
         r2 = self.store_chunks(self.client, token, "sample.fq", "r2", right)
         self.assertEqual(
@@ -1303,8 +1314,8 @@ class WebWorkbenchTests(unittest.TestCase):
                 "assembler_order": '["spades"]',
                 "sample": "isolate_17",
                 "spades_kmers": "22",
-                "r1": (io.BytesIO(b"@r1\nACGT\n+\nIIII\n"), "reads_R1.fastq"),
-                "r2": (io.BytesIO(b"@r2\nTGCA\n+\nIIII\n"), "reads_R2.fastq"),
+                "r1": (io.BytesIO(PAIR_R1), "reads_R1.fastq"),
+                "r2": (io.BytesIO(PAIR_R2), "reads_R2.fastq"),
             },
             headers={"X-CSRF-Token": token},
             content_type="multipart/form-data",
@@ -1694,8 +1705,8 @@ class WebWorkbenchTests(unittest.TestCase):
                 "assembler_order": '["megahit"]',
                 "assembler": ["megahit"],
                 "sample": "isolate_17",
-                "r1": (io.BytesIO(b"@r1\nACGT\n+\nIIII\n"), "reads_R1.fastq.gz"),
-                "r2": (io.BytesIO(b"@r2\nTGCA\n+\nIIII\n"), "reads_R2.fastq.gz"),
+                "r1": (io.BytesIO(gz(PAIR_R1)), "reads_R1.fastq.gz"),
+                "r2": (io.BytesIO(gz(PAIR_R2)), "reads_R2.fastq.gz"),
             },
             headers={"X-CSRF-Token": token},
             content_type="multipart/form-data",
@@ -1707,8 +1718,8 @@ class WebWorkbenchTests(unittest.TestCase):
                 "assembler_order": '["spades"]',
                 "assembler": ["spades"],
                 "sample": "alice_only_strain",
-                "r1": (io.BytesIO(b"@r1\nACGT\n+\nIIII\n"), "reads_R1.fastq.gz"),
-                "r2": (io.BytesIO(b"@r2\nTGCA\n+\nIIII\n"), "reads_R2.fastq.gz"),
+                "r1": (io.BytesIO(gz(PAIR_R1)), "reads_R1.fastq.gz"),
+                "r2": (io.BytesIO(gz(PAIR_R2)), "reads_R2.fastq.gz"),
             },
             headers={"X-CSRF-Token": token},
             content_type="multipart/form-data",
@@ -1735,8 +1746,8 @@ class WebWorkbenchTests(unittest.TestCase):
         self.assertIn(b'value="alice_only_strain"', alice_page.data)
         self.assertIn(b'value="isolate_17"', alice_page.data)
 
-        left = b"@r1\nACGTACGT\n+\nIIIIIIII\n"
-        right = b"@r2\nTGCAAAAA\n+\nIIIIIIII\n"
+        left = b"@pair/1\nACGTACGT\n+\nIIIIIIII\n"
+        right = b"@pair/2\nTGCAAAAA\n+\nIIIIIIII\n"
         r1 = self.store_chunks(self.client, token, "lane_R1.fastq", "r1", left)
         r2 = self.store_chunks(self.client, token, "lane_R2.fastq", "r2", right)
         self.assertEqual(
@@ -1805,8 +1816,8 @@ class WebWorkbenchTests(unittest.TestCase):
                 "assembler_order": '["spades"]',
                 "assembler": ["spades"],
                 "sample": "isolate_17",
-                "r1": (io.BytesIO(b"@r1\nACGT\n+\nIIII\n"), "reads_R1.fastq.gz"),
-                "r2": (io.BytesIO(b"@r2\nTGCA\n+\nIIII\n"), "reads_R2.fastq.gz"),
+                "r1": (io.BytesIO(gz(PAIR_R1)), "reads_R1.fastq.gz"),
+                "r2": (io.BytesIO(gz(PAIR_R2)), "reads_R2.fastq.gz"),
             },
             headers={"X-CSRF-Token": bob_token},
             content_type="multipart/form-data",
@@ -2185,6 +2196,104 @@ class WebWorkbenchTests(unittest.TestCase):
         finished = self.client.get("/api/jobs/{}".format(job_id)).json["job"]
         self.assertEqual(finished["status"], "failed")
         self.assertIsNone(finished["process_group_id"])
+
+    def test_worker_runs_a_command_the_cli_parser_accepts(self):
+        self.pipeline.write_text(
+            "import pathlib, sys\n"
+            "args = sys.argv\n"
+            "out = pathlib.Path(args[args.index('--outdir') + 1])\n"
+            "out.mkdir(parents=True, exist_ok=True)\n"
+            "job_id = args[args.index('--job-id') + 1]\n"
+            "(out / 'seen-job.txt').write_text(job_id)\n"
+            "(out / 'comparison.tsv').write_text('Assembler\\tN50\\nspades\\t1\\n')\n",
+            encoding="utf-8",
+        )
+        token = self.login(self.client)
+        job_id = self.submit_job(self.client, token, ("spades", "megahit")).json["job"]["id"]
+        self.assertTrue(process_next_job(self.app))
+        job = self.client.get("/api/jobs/{}".format(job_id)).json["job"]
+        self.assertEqual(job["status"], "succeeded")
+        log_text = (self.app.config["JOBS_ROOT"] / job_id / "logs" / "job.log").read_text(encoding="utf-8")
+        self.assertIn("--job-id", log_text)
+        self.assertIn(job_id, log_text)
+        seen = self.app.config["JOBS_ROOT"] / job_id / "output" / "seen-job.txt"
+        self.assertEqual(seen.read_text(encoding="utf-8"), job_id)
+
+    def test_partial_success_keeps_results_when_one_assembler_fails(self):
+        self.pipeline.write_text(
+            "import json, pathlib, sys\n"
+            "out = pathlib.Path(sys.argv[sys.argv.index('--outdir') + 1])\n"
+            "out.mkdir(parents=True, exist_ok=True)\n"
+            "(out / 'comparison.tsv').write_text('ok\\n')\n"
+            "(out / 'assembly_outcome.json').write_text(json.dumps({'status': 'partial_success'}))\n"
+            "raise SystemExit(3)\n",
+            encoding="utf-8",
+        )
+        token = self.login(self.client)
+        job_id = self.submit_job(self.client, token, ("spades", "megahit")).json["job"]["id"]
+        self.assertTrue(process_next_job(self.app))
+        job = self.client.get("/api/jobs/{}".format(job_id)).json["job"]
+        self.assertEqual(job["status"], "partial_success")
+        self.assertIn("部分", job["error"])
+        self.assertTrue(job["archive_available"])
+        self.assertIn("部分完成".encode(), self.client.get("/history").data)
+
+    def test_every_assembler_failing_marks_the_job_failed(self):
+        self.pipeline.write_text(
+            "import json, pathlib, sys\n"
+            "out = pathlib.Path(sys.argv[sys.argv.index('--outdir') + 1])\n"
+            "out.mkdir(parents=True, exist_ok=True)\n"
+            "(out / 'assembly_outcome.json').write_text(json.dumps({'status': 'failed'}))\n"
+            "raise SystemExit(1)\n",
+            encoding="utf-8",
+        )
+        token = self.login(self.client)
+        job_id = self.submit_job(self.client, token, ("spades",)).json["job"]["id"]
+        self.assertTrue(process_next_job(self.app))
+        job = self.client.get("/api/jobs/{}".format(job_id)).json["job"]
+        self.assertEqual(job["status"], "failed")
+        self.assertFalse(job["archive_available"])
+
+    def test_interrupted_archive_is_not_published(self):
+        token = self.login(self.client)
+        job_id = self.submit_job(self.client, token, ("spades",)).json["job"]["id"]
+        with patch("web.worker.tarfile.open", side_effect=OSError("archive interrupted")):
+            self.assertTrue(process_next_job(self.app))
+        job = self.client.get("/api/jobs/{}".format(job_id)).json["job"]
+        self.assertEqual(job["status"], "failed")
+        self.assertFalse(job["archive_available"])
+        self.assertFalse((self.app.config["ARCHIVE_ROOT"] / "{}.tar.gz".format(job_id)).exists())
+        self.assertFalse((self.app.config["ARCHIVE_ROOT"] / "{}.tar.gz.partial".format(job_id)).exists())
+
+    def test_archive_disk_full_reports_disk_and_does_not_publish(self):
+        token = self.login(self.client)
+        job_id = self.submit_job(self.client, token, ("spades",)).json["job"]["id"]
+        with patch("web.worker.tarfile.open", side_effect=OSError(errno.ENOSPC, "nospace")):
+            self.assertTrue(process_next_job(self.app))
+        job = self.client.get("/api/jobs/{}".format(job_id)).json["job"]
+        self.assertEqual(job["status"], "failed")
+        self.assertIn("磁盘不足", job["error"])
+        self.assertFalse((self.app.config["ARCHIVE_ROOT"] / "{}.tar.gz.partial".format(job_id)).exists())
+
+    def test_mismatched_fastq_pair_never_starts(self):
+        token = self.login(self.client)
+        rejected = self.client.post(
+            "/api/jobs",
+            data={
+                "csrf_token": token,
+                "assembler_order": '["spades"]',
+                "assembler": ["spades"],
+                "sample": "isolate_17",
+                "r1": (io.BytesIO(gz(b"@pair/1\nAC\n+\nII\n")), "reads_R1.fastq.gz"),
+                "r2": (io.BytesIO(gz(b"@pair/2\nAC\n+\nII\n@pair/2\nGG\n+\nII\n")), "reads_R2.fastq.gz"),
+            },
+            headers={"X-CSRF-Token": token},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(rejected.status_code, 400, rejected.get_json())
+        self.assertIn("数量不一致", rejected.json["error"])
+        self.assertFalse(any(self.app.config["JOBS_ROOT"].rglob("job.log")))
+        self.assertTrue(any(self.app.config["TEMP_ROOT"].rglob("fastq_pair.json")))
 
 
 if __name__ == "__main__":

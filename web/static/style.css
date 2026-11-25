@@ -341,6 +341,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .status-queued { color: var(--amber); background: #fbf4e8; border-color: #ead5b1; }
 .status-running { color: var(--teal); background: var(--teal-soft); border-color: #b6dcd2; }
 .status-succeeded { color: #376d48; background: #edf5e9; border-color: #c9dec0; }
+.status-partial_success { color: var(--deep); background: var(--paper); border-color: var(--line); }
 .status-failed { color: #a64e38; background: var(--coral-soft); border-color: #e9c2b5; }
 .status-cancelling { color: #8a5a12; background: #fbf4e8; border-color: #ead5b1; }
 .status-cancelled { color: #5c675f; background: #f3f5f4; border-color: #d5ddd8; }
