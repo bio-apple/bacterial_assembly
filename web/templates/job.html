@@ -35,205 +35,213 @@
     </header>
 
     <div class="monitor-live" aria-live="polite">
-    <dl class="monitor-facts">
-      <div>
-        <dt>任务状态</dt>
-        <dd>{{ status_pill(job.status, "job-status") }}</dd>
-      </div>
-      <div>
-        <dt>当前阶段</dt>
-        <dd id="current-stage">{{ progress.current.label or ("等待开始" if job.status == "queued" else "尚未进入阶段") }}</dd>
-      </div>
-      <div>
-        <dt>阶段进度</dt>
-        <dd id="stage-progress">{% if progress.current.percent is not none %}{{ progress.current.percent }}%{% else %}未报告{% endif %}</dd>
-      </div>
-      <div>
-        <dt>已运行时间</dt>
-        <dd id="elapsed"{% if progress.elapsed_seconds is not none %} data-elapsed-seconds="{{ progress.elapsed_seconds }}"{% endif %}>{{ progress.elapsed_label }}</dd>
-      </div>
-      <div>
-        <dt>最后更新</dt>
-        <dd><time id="stage-updated" datetime="{{ progress.updated_at or '' }}">{{ progress.updated_at or "—" }}</time></dd>
-      </div>
-    </dl>
+      <dl class="monitor-facts">
+        <div>
+          <dt>任务状态</dt>
+          <dd>{{ status_pill(job.status, "job-status") }}</dd>
+        </div>
+        <div>
+          <dt>当前阶段</dt>
+          <dd id="current-stage">{{ progress.current.label or ("等待开始" if job.status == "queued" else "尚未进入阶段") }}</dd>
+        </div>
+        <div>
+          <dt>阶段进度</dt>
+          <dd id="stage-progress">{% if progress.current.percent is not none %}{{ progress.current.percent }}%{% else %}未报告{% endif %}</dd>
+        </div>
+        <div>
+          <dt>已运行时间</dt>
+          <dd id="elapsed"{% if progress.elapsed_seconds is not none %} data-elapsed-seconds="{{ progress.elapsed_seconds }}"{% endif %}>{{ progress.elapsed_label }}</dd>
+        </div>
+        <div>
+          <dt>最后更新</dt>
+          <dd><time id="stage-updated" datetime="{{ progress.updated_at or '' }}">{{ progress.updated_at or "—" }}</time></dd>
+        </div>
+      </dl>
     </div>
-    <dl class="record-grid phase-times" id="phase-times"{% if not job.started_at and not job.cancel_requested_at and not job.archived_at %} hidden{% endif %}>
-      <div>
-        <dt>开始执行</dt>
-        <dd id="phase-started">{{ job.started_at or "尚未开始" }}</dd>
-      </div>
-      <div>
-        <dt>请求取消</dt>
-        <dd id="phase-cancel">{{ job.cancel_requested_at or "没有" }}</dd>
-      </div>
-      <div>
-        <dt>归档完成</dt>
-        <dd id="phase-archived">{{ job.archived_at or "尚未发布下载" }}</dd>
-      </div>
-    </dl>
-    <p id="worker-beat" class="report-note"{% if job.status not in ("running", "cancelling") %} hidden{% endif %}>第 {{ job.attempt or 1 }} 次执行{% if job.heartbeat_at %} · 最近心跳 {{ job.heartbeat_at }}{% endif %}{% if job.process_group_id %} · 进程组 {{ job.process_group_id }}{% endif %}</p>
     <p id="job-error" class="monitor-error" role="alert" aria-live="assertive"{% if not job.error %} hidden{% endif %}>{{ job.error or "" }}</p>
 
-    <section class="monitor-block" aria-labelledby="sample-title">
-      <div class="monitor-section-head">
-        <h2 id="sample-title">样本与测序数据</h2>
-        <p>样本是生物材料。测序数据是这一次的双端 reads。</p>
-      </div>
-      <dl class="record-grid" id="sequencing-data">
-        <div>
-          <dt>样本</dt>
-          <dd id="sample-name">{{ detail.sample_name }}</dd>
-        </div>
-        {% if detail.batch %}
-        <div>
-          <dt>R1</dt>
-          <dd>{{ detail.batch.r1_filename }}<span class="checksum">{% if detail.batch.r1_sha256 %}{{ detail.batch.r1_sha256 }}{% else %}未记录校验值{% endif %}</span></dd>
-        </div>
-        <div>
-          <dt>R2</dt>
-          <dd>{{ detail.batch.r2_filename }}<span class="checksum">{% if detail.batch.r2_sha256 %}{{ detail.batch.r2_sha256 }}{% else %}未记录校验值{% endif %}</span></dd>
-        </div>
-        {% else %}
-        <div>
-          <dt>测序数据</dt>
-          <dd>没有单独的测序数据记录。样本名称仍是 {{ detail.sample_name }}。</dd>
-        </div>
-        {% endif %}
-        {% for item in detail.inputs %}
-        <div>
-          <dt>任务输入 {{ item.role }}</dt>
-          <dd>{% if item.name %}{{ item.name }}{% if item.bytes is not none %}<span class="checksum">{{ item.bytes }} 字节</span>{% endif %}{% else %}文件不在{% endif %}</dd>
-        </div>
-        {% endfor %}
-      </dl>
-    </section>
-
-    {% with qc=detail.qc, fastp_html=detail.fastp_html, job_id=job.id %}
-    {% include "qc_summary.html" %}
-    {% endwith %}
-
-    <section class="monitor-block" aria-labelledby="parameter-title">
-      <div class="monitor-section-head">
-        <h2 id="parameter-title">分析参数</h2>
-        <p>这次任务实际保存的选择。</p>
-      </div>
-      <dl class="record-grid">
-        <div>
-          <dt>组装器</dt>
-          <dd>{{ detail.parameters.assemblers | join(" / ") or "未记录" }}</dd>
-        </div>
-        <div>
-          <dt>SPAdes k-mer</dt>
-          <dd>{{ detail.parameters.spades_kmers or "未设置" }}</dd>
-        </div>
-        <div>
-          <dt>SPAdes careful</dt>
-          <dd>{{ "开启" if detail.parameters.spades_careful else "关闭" }}</dd>
-        </div>
-        <div>
-          <dt>线程</dt>
-          <dd id="assigned-threads">{{ detail.resources.threads_text }}</dd>
-        </div>
-        <div>
-          <dt>内存</dt>
-          <dd id="assigned-memory">{{ detail.resources.memory_text }}</dd>
-        </div>
-      </dl>
-      <div class="host-usage" id="host-usage"{% if job.status not in ("running", "cancelling") %} hidden{% endif %}>
-        <h3>当前主机占用</h3>
-        <p id="host-usage-note">此刻这台机器的占用，不是本任务的历史曲线。</p>
-        <dl id="host-usage-metrics" class="record-grid" hidden>
-          <div><dt>CPU</dt><dd id="host-cpu"></dd></div>
-          <div><dt>内存</dt><dd id="host-memory"></dd></div>
-        </dl>
-      </div>
-    </section>
-
-    <section class="monitor-block" id="step-ledger" aria-labelledby="step-title">
-      <div class="monitor-section-head">
-        <h2 id="step-title">分析步骤</h2>
-        <p>一个组装器失败时，其余步骤仍继续。</p>
-      </div>
-      <p id="step-ledger-empty" class="report-note"{% if detail.steps %} hidden{% endif %}>还没有步骤记录。</p>
-      <div class="compare-scroll" id="step-ledger-table"{% if not detail.steps %} hidden{% endif %}>
-        <table class="compare-table step-sheet">
-          <thead>
-            <tr><th>分析步骤</th><th>状态</th></tr>
-          </thead>
-          <tbody id="step-ledger-body"{% if not detail.steps %} hidden{% endif %}>
-            {% for step in detail.steps %}
-            <tr>
-              <th scope="row">{{ step.label }}{% if step.error %}<small>{{ step.error }}</small>{% endif %}{% if step.exit_code is not none %}<span class="checksum">退出码 {{ step.exit_code }}</span>{% endif %}</th>
-              <td>{{ status_pill(step.status) }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="monitor-rail-section" aria-labelledby="rail-title">
-      <div class="monitor-section-head">
-        <h2 id="rail-title">阶段</h2>
-        <p>按本次选择的顺序执行。没有可靠比例时，只显示阶段状态。</p>
-      </div>
-      <ol class="stage-rail" id="stage-rail">
-        {% for group in progress.groups %}
-        <li class="stage-method state-{{ group.state }}" data-method="{{ group.id }}">
-          <span class="stage-node" aria-hidden="true"></span>
-          <div>
-            <div class="stage-method-head">
-              <strong>{{ group.title }}</strong>
-              <span class="stage-state">{{ state_labels.get(group.state, group.state) }}</span>
-            </div>
-            <ol class="stage-substeps">
-              {% for step in group.steps %}
-              <li class="stage-step state-{{ step.state }}" data-stage-id="{{ step.id }}">
-                <span class="stage-step-label">{{ step.label }}</span>
-                <span class="stage-step-meta">
-                  {% if step.percent is not none %}<span class="stage-percent">{{ step.percent }}%</span>{% endif %}
-                  <span class="stage-state">{{ state_labels.get(step.state, step.state) }}</span>
-                </span>
-                {% if step.detail %}<small>{{ step.detail }}</small>{% endif %}
-              </li>
-              {% endfor %}
-            </ol>
+    <div class="monitor-layout">
+      <div class="monitor-main">
+        <section class="panel monitor-block" aria-labelledby="rail-title">
+          <div class="monitor-section-head">
+            <h2 id="rail-title">阶段流水线</h2>
+            <p>按本次选择的顺序执行。没有可靠比例时，只显示阶段状态。</p>
           </div>
-        </li>
-        {% endfor %}
-      </ol>
-    </section>
+          <ol class="stage-rail" id="stage-rail">
+            {% for group in progress.groups %}
+            <li class="stage-method state-{{ group.state }}" data-method="{{ group.id }}">
+              <span class="stage-node" aria-hidden="true"></span>
+              <div>
+                <div class="stage-method-head">
+                  <strong>{{ group.title }}</strong>
+                  <span class="stage-state">{{ state_labels.get(group.state, group.state) }}</span>
+                </div>
+                <ol class="stage-substeps">
+                  {% for step in group.steps %}
+                  <li class="stage-step state-{{ step.state }}" data-stage-id="{{ step.id }}">
+                    <span class="stage-step-label">{{ step.label }}</span>
+                    <span class="stage-step-meta">
+                      {% if step.percent is not none %}<span class="stage-percent">{{ step.percent }}%</span>{% endif %}
+                      <span class="stage-state">{{ state_labels.get(step.state, step.state) }}</span>
+                    </span>
+                    {% if step.detail %}<small>{{ step.detail }}</small>{% endif %}
+                  </li>
+                  {% endfor %}
+                </ol>
+              </div>
+            </li>
+            {% endfor %}
+          </ol>
+        </section>
 
-    {% with comparisons=detail.comparisons %}
-    {% include "assembler_comparison.html" %}
-    {% endwith %}
+        <section class="panel monitor-block" id="step-ledger" aria-labelledby="step-title">
+          <div class="monitor-section-head">
+            <h2 id="step-title">分析步骤</h2>
+            <p>一个组装器失败时，其余步骤仍继续。</p>
+          </div>
+          <p id="step-ledger-empty" class="report-note"{% if detail.steps %} hidden{% endif %}>还没有步骤记录。</p>
+          <div class="compare-scroll" id="step-ledger-table"{% if not detail.steps %} hidden{% endif %}>
+            <table class="compare-table step-sheet">
+              <thead>
+                <tr><th>分析步骤</th><th>状态</th></tr>
+              </thead>
+              <tbody id="step-ledger-body"{% if not detail.steps %} hidden{% endif %}>
+                {% for step in detail.steps %}
+                <tr>
+                  <th scope="row">{{ step.label }}{% if step.error %}<small>{{ step.error }}</small>{% endif %}{% if step.exit_code is not none %}<span class="checksum">退出码 {{ step.exit_code }}</span>{% endif %}</th>
+                  <td>{{ status_pill(step.status) }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </section>
 
-    <div class="monitor-actions">
-      <button type="button" class="button button-cancel" id="cancel-job"{% if job.status not in ("queued", "running") %} hidden{% endif %}>取消任务</button>
-      <a id="result-download" class="button button-download" {% if not job.archive_available %}hidden{% endif %}
-         href="{{ url_for('download_job', job_id=job.id) }}">
-        {{ "下载部分结果" if job.status in ("partial_success", "failed", "cancelled") else "下载分析结果" }}
-      </a>
-      {% if detail.inputs_available %}
-      <button type="button" class="history-rerun" id="rerun-job" data-rerun-job="{{ job.id }}">重新分析</button>
-      {% else %}
-      <p class="history-rerun-error">原来的测序文件已经不在，不能重新分析。</p>
-      {% endif %}
-      <a class="monitor-log-link" href="{{ url_for('download_job_log', job_id=job.id) }}">下载运行日志</a>
+        {% with comparisons=detail.comparisons %}
+        {% include "assembler_comparison.html" %}
+        {% endwith %}
+      </div>
+
+      <aside class="monitor-side">
+        <section class="panel monitor-block" aria-labelledby="sample-title">
+          <div class="monitor-section-head">
+            <h2 id="sample-title">样本与测序数据</h2>
+            <p>样本是生物材料。测序数据是这一次的双端 reads。</p>
+          </div>
+          <dl class="record-grid" id="sequencing-data">
+            <div>
+              <dt>样本</dt>
+              <dd id="sample-name">{{ detail.sample_name }}</dd>
+            </div>
+            {% if detail.batch %}
+            <div>
+              <dt>R1</dt>
+              <dd>{{ detail.batch.r1_filename }}<span class="checksum">{% if detail.batch.r1_sha256 %}{{ detail.batch.r1_sha256 }}{% else %}未记录校验值{% endif %}</span></dd>
+            </div>
+            <div>
+              <dt>R2</dt>
+              <dd>{{ detail.batch.r2_filename }}<span class="checksum">{% if detail.batch.r2_sha256 %}{{ detail.batch.r2_sha256 }}{% else %}未记录校验值{% endif %}</span></dd>
+            </div>
+            {% else %}
+            <div>
+              <dt>测序数据</dt>
+              <dd>没有单独的测序数据记录。样本名称仍是 {{ detail.sample_name }}。</dd>
+            </div>
+            {% endif %}
+            {% for item in detail.inputs %}
+            <div>
+              <dt>任务输入 {{ item.role }}</dt>
+              <dd>{% if item.name %}{{ item.name }}{% if item.bytes is not none %}<span class="checksum">{{ item.bytes }} 字节</span>{% endif %}{% else %}文件不在{% endif %}</dd>
+            </div>
+            {% endfor %}
+          </dl>
+        </section>
+
+        {% with qc=detail.qc, fastp_html=detail.fastp_html, job_id=job.id %}
+        {% include "qc_summary.html" %}
+        {% endwith %}
+
+        <section class="panel monitor-block" aria-labelledby="parameter-title">
+          <div class="monitor-section-head">
+            <h2 id="parameter-title">分析参数</h2>
+            <p>这次任务实际保存的选择。</p>
+          </div>
+          <dl class="record-grid">
+            <div>
+              <dt>组装器</dt>
+              <dd>{{ detail.parameters.assemblers | join(" / ") or "未记录" }}</dd>
+            </div>
+            <div>
+              <dt>SPAdes k-mer</dt>
+              <dd>{{ detail.parameters.spades_kmers or "未设置" }}</dd>
+            </div>
+            <div>
+              <dt>SPAdes careful</dt>
+              <dd>{{ "开启" if detail.parameters.spades_careful else "关闭" }}</dd>
+            </div>
+            <div>
+              <dt>线程</dt>
+              <dd id="assigned-threads">{{ detail.resources.threads_text }}</dd>
+            </div>
+            <div>
+              <dt>内存</dt>
+              <dd id="assigned-memory">{{ detail.resources.memory_text }}</dd>
+            </div>
+          </dl>
+          <dl class="record-grid phase-times" id="phase-times"{% if not job.started_at and not job.cancel_requested_at and not job.archived_at %} hidden{% endif %}>
+            <div>
+              <dt>开始执行</dt>
+              <dd id="phase-started">{{ job.started_at or "尚未开始" }}</dd>
+            </div>
+            <div>
+              <dt>请求取消</dt>
+              <dd id="phase-cancel">{{ job.cancel_requested_at or "没有" }}</dd>
+            </div>
+            <div>
+              <dt>归档完成</dt>
+              <dd id="phase-archived">{{ job.archived_at or "尚未发布下载" }}</dd>
+            </div>
+          </dl>
+          <p id="worker-beat" class="report-note"{% if job.status not in ("running", "cancelling") %} hidden{% endif %}>第 {{ job.attempt or 1 }} 次执行{% if job.heartbeat_at %} · 最近心跳 {{ job.heartbeat_at }}{% endif %}{% if job.process_group_id %} · 进程组 {{ job.process_group_id }}{% endif %}</p>
+          <div class="host-usage" id="host-usage"{% if job.status not in ("running", "cancelling") %} hidden{% endif %}>
+            <h3>当前主机占用</h3>
+            <p id="host-usage-note">此刻这台机器的占用，不是本任务的历史曲线。</p>
+            <dl id="host-usage-metrics" class="record-grid" hidden>
+              <div><dt>CPU</dt><dd id="host-cpu"></dd></div>
+              <div><dt>内存</dt><dd id="host-memory"></dd></div>
+            </dl>
+          </div>
+        </section>
+
+        <div class="panel" style="padding:18px">
+          <div class="monitor-actions" style="margin:0">
+            <button type="button" class="button button-cancel" id="cancel-job"{% if job.status not in ("queued", "running") %} hidden{% endif %}>取消任务</button>
+            <a id="result-download" class="button button-download" {% if not job.archive_available %}hidden{% endif %}
+               href="{{ url_for('download_job', job_id=job.id) }}">
+              {{ "下载部分结果" if job.status in ("partial_success", "failed", "cancelled") else "下载分析结果" }}
+            </a>
+            {% if detail.inputs_available %}
+            <button type="button" class="history-rerun" id="rerun-job" data-rerun-job="{{ job.id }}">重新分析</button>
+            {% else %}
+            <p class="history-rerun-error">原来的测序文件已经不在，不能重新分析。</p>
+            {% endif %}
+            <a class="monitor-log-link" href="{{ url_for('download_job_log', job_id=job.id) }}">下载运行日志</a>
+          </div>
+          <p id="rerun-error" class="history-rerun-error" role="alert"></p>
+          <div id="report-links" class="report-links">
+            <p data-report-ready{% if not detail.report_ready %} hidden{% endif %}>
+              <a href="{{ url_for('job_report', job_id=job.id) }}">查看分析结果</a>
+              <a href="{{ url_for('download_job_report', job_id=job.id, kind='tsv') }}">下载 TSV</a>
+            </p>
+            <p data-report-waiting{% if detail.report_ready %} hidden{% endif %}>报告还不能导出。比较表、软件版本、质量控制或阶段失败记录还不在。</p>
+            <p class="report-absent">PDF 未提供。</p>
+          </div>
+          <p id="partial-note" class="monitor-note"{% if job.status != "cancelled" or job.archive_available %} hidden{% endif %}>运行日志已保留，结果不完整。</p>
+        </div>
+      </aside>
     </div>
-    <p id="rerun-error" class="history-rerun-error" role="alert"></p>
-    <div id="report-links" class="report-links">
-      <p data-report-ready{% if not detail.report_ready %} hidden{% endif %}>
-        <a href="{{ url_for('job_report', job_id=job.id) }}">查看 HTML 报告</a>
-        <a href="{{ url_for('download_job_report', job_id=job.id, kind='tsv') }}">下载 TSV</a>
-      </p>
-      <p data-report-waiting{% if detail.report_ready %} hidden{% endif %}>报告还不能导出。比较表、软件版本、质量控制或阶段失败记录还不在。</p>
-      <p class="report-absent">PDF 未提供。</p>
-    </div>
-    <p id="partial-note" class="monitor-note"{% if job.status != "cancelled" or job.archive_available %} hidden{% endif %}>运行日志已保留，结果不完整。</p>
 
-    <section class="monitor-log" aria-labelledby="log-title">
+    <section class="panel monitor-log monitor-log-block" aria-labelledby="log-title" style="padding:18px">
       <div class="monitor-section-head">
         <h2 id="log-title">运行日志</h2>
         <p>日志保留命令和输出。阶段是否在跑，以上方记录为准。</p>

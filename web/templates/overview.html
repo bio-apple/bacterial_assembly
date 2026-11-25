@@ -47,86 +47,74 @@
       {% endfor %}
     </section>
 
-    <section class="census" aria-label="任务数量">
-      <div class="census-lead">
-        <span>当前任务</span>
-        <strong>{{ active_count }}</strong>
-        <small>排队 {{ counts.queued }} · 分析中 {{ counts.running }}{% if counts.cancelling %} · 取消中 {{ counts.cancelling }}{% endif %}</small>
-      </div>
-      <div class="census-item census-done">
+    <section class="stat-grid" aria-label="任务数量">
+      <article class="stat-card">
+        <span>全部任务</span>
+        <strong>{{ total_count }}</strong>
+      </article>
+      <article class="stat-card is-info">
+        <span>排队中</span>
+        <strong>{{ counts.queued }}</strong>
+      </article>
+      <article class="stat-card">
+        <span>分析中</span>
+        <strong>{{ counts.running + counts.cancelling }}</strong>
+      </article>
+      <article class="stat-card is-success">
         <span>已完成</span>
         <strong>{{ counts.succeeded }}</strong>
-      </div>
-      {% if counts.partial_success %}
-      <div class="census-item">
+      </article>
+      <article class="stat-card is-warn">
         <span>部分完成</span>
         <strong>{{ counts.partial_success }}</strong>
-      </div>
-      {% endif %}
-      <div class="census-item{% if counts.failed %} census-failed{% endif %}">
+      </article>
+      <article class="stat-card is-danger">
         <span>失败</span>
         <strong>{{ counts.failed }}</strong>
-      </div>
-      <div class="census-item">
-        <span>全部记录</span>
-        <strong>{{ total_count }}</strong>
-      </div>
+      </article>
     </section>
 
-    <div class="overview-columns">
-      <section class="overview-panel" aria-labelledby="recent-title">
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow">RECENT RUNS</p>
-            <h2 id="recent-title">最近分析</h2>
-          </div>
-          <a class="overview-more" href="{{ url_for('job_history') }}">处理历史 →</a>
+    <section class="overview-panel" aria-labelledby="recent-title">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">RECENT RUNS</p>
+          <h2 id="recent-title">最近分析</h2>
         </div>
-        {% if recent_jobs %}
-        <ul class="overview-runs">
-          {% for job in recent_jobs %}
-          <li>
-            <a class="overview-run-link" href="{{ url_for('job_page', job_id=job.id) }}">
-              <strong>{{ job.sample }}</strong>
-              <span>{{ job.module_code }} · {{ job.module_name }}</span>
-            </a>
-            {{ status_pill(job.status) }}
-          </li>
-          {% endfor %}
-        </ul>
-        {% else %}
-        <p class="empty-state">还没有分析任务。从下面的入口提交一个样本。</p>
-        {% endif %}
-      </section>
+        <a class="overview-more" href="{{ url_for('job_history') }}">处理历史 →</a>
+      </div>
+      {% if recent_jobs %}
+      <div class="data-table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col">任务编号</th>
+              <th scope="col">样本</th>
+              <th scope="col">组装方法</th>
+              <th scope="col">状态</th>
+              <th scope="col">创建时间</th>
+              <th scope="col">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for job in recent_jobs %}
+            <tr>
+              <td class="mono">{{ job.id[:8] }}</td>
+              <td><strong>{{ job.sample }}</strong></td>
+              <td>{{ job.assemblers | join(" / ") }}</td>
+              <td>{{ status_pill(job.status) }}</td>
+              <td><time class="local-time" data-timestamp="{{ job.created_at }}" datetime="{{ job.created_at }}">{{ job.created_at }}</time></td>
+              <td><a href="{{ url_for('job_page', job_id=job.id) }}">查看详情</a></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="empty-state">还没有分析任务。从下面的入口提交一个样本。</p>
+      {% endif %}
+    </section>
 
-      <section class="overview-panel" aria-labelledby="report-title">
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow">OUTPUT</p>
-            <h2 id="report-title">最近报告</h2>
-          </div>
-        </div>
-        {% if reports %}
-        <ul class="overview-reports">
-          {% for job in reports %}
-          <li>
-            <div>
-              <strong>{{ job.sample }}</strong>
-              <span>{{ job.module_name }}</span>
-            </div>
-            <a href="{{ url_for('download_job', job_id=job.id) }}">
-              {{ "下载部分结果" if job.status in ("partial_success", "failed", "cancelled") else "下载结果" }} ↓
-            </a>
-          </li>
-          {% endfor %}
-        </ul>
-        {% else %}
-        <p class="empty-state">还没有可下载的结果。任务完成后会出现在这里。</p>
-        {% endif %}
-      </section>
-    </div>
-
-    <section class="overview-access" aria-labelledby="access-title">
+    <section class="overview-access" aria-labelledby="access-title" style="margin-top:24px">
       <div class="panel-heading">
         <div>
           <p class="eyebrow">START HERE</p>

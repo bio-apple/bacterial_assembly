@@ -1,3 +1,59 @@
+<section class="monitor-block panel" style="padding:18px;margin-bottom:20px">
+  <div class="monitor-section-head">
+    <h2>A. 组装摘要</h2>
+    <p>仅展示本次报告中已写出的 QUAST 指标；缺失项不填充。</p>
+  </div>
+  {% set ns = namespace(shown=false) %}
+  {% for item in report.comparisons %}
+    {% if item.ready and not ns.shown %}
+      {% set ns.shown = true %}
+      <p class="report-note">长度口径：{{ item.scope_label }}{% if item.note %} · {{ item.note }}{% endif %}</p>
+      <div class="results-grid">
+        {% for metric in item.metrics %}
+        <article class="metric-tile">
+          <span>{{ metric.name }}</span>
+          <strong>
+            {% if metric.cells and metric.cells[0].text %}{{ metric.cells[0].text }}{% else %}N/A{% endif %}
+          </strong>
+          {% if item.columns and item.columns[0] %}
+          <span class="checksum">{{ item.columns[0].label }}</span>
+          {% endif %}
+        </article>
+        {% endfor %}
+      </div>
+      {% if item.columns|length > 1 %}
+      <p class="report-note">摘要默认展示第一列组装方法；完整对比见下方比较表。</p>
+      {% endif %}
+    {% endif %}
+  {% endfor %}
+  {% if not ns.shown %}
+  <p class="report-note">暂无可用的组装摘要指标。</p>
+  {% endif %}
+</section>
+
+<section class="monitor-block panel" style="padding:18px;margin-bottom:20px">
+  <div class="monitor-section-head">
+    <h2>B. 组装方法比较</h2>
+    <p>数据来自真实 QUAST 比较表。</p>
+  </div>
+  {% with comparisons=report.comparisons %}
+  {% include "assembler_comparison.html" %}
+  {% endwith %}
+</section>
+
+<section class="monitor-block panel" style="padding:18px;margin-bottom:20px">
+  <div class="monitor-section-head">
+    <h2>C. 下载结果</h2>
+    <p>以下入口连接现有下载接口。</p>
+  </div>
+  <div class="download-row">
+    <a class="button button-primary" href="{{ url_for('download_job_report', job_id=job.id, kind='html') }}">下载 HTML 报告</a>
+    <a class="button" href="{{ url_for('download_job_report', job_id=job.id, kind='tsv') }}">下载 TSV</a>
+    <a class="button" href="{{ url_for('download_job', job_id=job.id) }}">下载结果归档</a>
+    <a class="button" href="{{ url_for('download_job_log', job_id=job.id) }}">下载运行日志</a>
+  </div>
+</section>
+
 <section class="monitor-block">
   <h2>样本与测序数据</h2>
   <dl class="record-grid">
@@ -64,10 +120,6 @@
   {% endif %}
   {% if report.qc_note %}<p class="report-note">{{ report.qc_note }}</p>{% endif %}
 </section>
-
-{% with comparisons=report.comparisons %}
-{% include "assembler_comparison.html" %}
-{% endwith %}
 
 <section class="monitor-block">
   <h2>异常提示</h2>

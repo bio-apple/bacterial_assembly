@@ -66,6 +66,12 @@
       </figure>
     </section>
 
+    <nav class="flow-steps" aria-label="提交流程">
+      <div class="flow-step"><b>1</b><div><strong>上传文件</strong><span>R1 / R2 FASTQ</span></div></div>
+      <div class="flow-step"><b>2</b><div><strong>配置组装</strong><span>选择组装方法与参数</span></div></div>
+      <div class="flow-step"><b>3</b><div><strong>确认提交</strong><span>校验通过后运行</span></div></div>
+    </nav>
+
     <div class="workspace-grid">
       <section class="panel submit-panel">
         <div class="panel-heading">
@@ -74,6 +80,7 @@
         </div>
         <form id="job-form">
           <input type="hidden" name="assembler_order" id="assembler-order" value="[]">
+          <p class="eyebrow" style="margin:0 0 10px">Step 1 · 上传文件</p>
           {% include "components/file_uploader.html" %}
           <div class="field-row">
             <label class="field">
@@ -89,12 +96,22 @@
             <p class="resource-policy">所选组装方法按选择顺序串行执行，每种方法尝试使用约 90% 的逻辑 CPU 和物理内存。样本任务仍按提交顺序排队；单个方法失败不阻止其余方法。</p>
           </div>
           <fieldset class="assembler-select">
-            <legend>组装器 <small>至少选择一种 · 按选择顺序运行</small></legend>
+            <legend>Step 2 · 组装方法 <small>至少选择一种 · 按选择顺序运行</small></legend>
             <div class="assembler-options">
+              {% set assembler_blurbs = {
+                "spades": "短读长 de Bruijn 图组装",
+                "unicycler": "细菌短读长组装流程",
+                "shovill": "细菌基因组快速组装封装",
+                "megahit": "大规模短读长组装"
+              } %}
               {% for assembler in assemblers %}
               <label class="assembler-option">
                 <input type="checkbox" name="assembler" value="{{ assembler }}">
-                <span class="check-box"></span><span>{{ assembler }}</span>
+                <span class="check-box"></span>
+                <span>
+                  <strong>{{ assembler }}</strong>
+                  <span class="tool-meta">{{ assembler_blurbs.get(assembler, "短读长组装方法") }}</span>
+                </span>
               </label>
               {% endfor %}
             </div>
@@ -107,7 +124,7 @@
             <label class="toggle-option"><input name="spades_careful" type="checkbox"><span>SPAdes careful 模式</span></label>
           </div>
           <div class="form-footer">
-            <p>任务按提交顺序运行 · 结果仅当前账号可见</p>
+            <p>Step 3 · 任务按提交顺序运行 · 结果仅当前账号可见</p>
             <button class="button button-primary" id="start-button" type="submit" disabled>运行组装 <span>→</span></button>
           </div>
           <p id="form-message" class="form-message" role="status" aria-live="polite"></p>
