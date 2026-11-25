@@ -23,6 +23,7 @@ from web.job_paths import pipeline_root_candidates, stage_record_path
 from web.reports import THRESHOLD_ABSENT, scope_comparison
 from web.steps import step_rows
 from web.storage_paths import contained_path, is_inside
+from web.task_backend import use_rq_pipeline
 
 ASSEMBLERS = ("spades", "unicycler", "shovill", "megahit")
 FASTQ_SUFFIXES = (".fastq.gz", ".fq.gz", ".fastq", ".fq")
@@ -673,6 +674,7 @@ def recorded_steps(row: sqlite3.Row) -> list[dict]:
         return []
     if not isinstance(assemblers, list) or any(not isinstance(item, str) for item in assemblers):
         return []
+    rows: list[dict] = []
     try:
         db = sqlite3.connect(current_app.config["DATABASE"], timeout=30)
         db.row_factory = sqlite3.Row
@@ -682,7 +684,17 @@ def recorded_steps(row: sqlite3.Row) -> list[dict]:
             db.close()
     except sqlite3.Error:
         current_app.logger.exception("Could not load job steps")
-        return []
+        rows = []
+    if rows:
+        return rows
+    if use_rq_pipeline():
+        try:
+            from web.step_read_model import recorded_steps_from_pg
+
+            return recorded_steps_from_pg(row["id"], assemblers)
+        except Exception:
+            current_app.logger.exception("Could not load Postgres job steps")
+            return []
     return rows
 
 
@@ -693,7 +705,20 @@ def job_progress(row: sqlite3.Row) -> dict:
     except (OSError, RuntimeError, ValueError):
         record_path = current_app.config["DATA_ROOT"] / "missing-stage-record.json"
     record = load_stage_record(record_path)
-    progress = build_progress(json.loads(row["assemblers"]), record, row["status"])
+    status = row["status"]
+    if use_rq_pipeline() and status == "queued":
+        try:
+            from web.pg import connection
+
+            with connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT status FROM jobs WHERE id = %s", (row["id"],))
+                    pg_job = cur.fetchone()
+            if pg_job and pg_job["status"]:
+                status = pg_job["status"]
+        except Exception:
+            pass
+    progress = build_progress(json.loads(row["assemblers"]), record, status)
     if not progress["updated_at"]:
         progress["updated_at"] = row["updated_at"]
     seconds = elapsed_seconds(row["started_at"], row["completed_at"])

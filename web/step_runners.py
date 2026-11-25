@@ -10,27 +10,20 @@ from pathlib import Path
 
 from scripts.assembly_outcome import write_outcome
 from scripts.common import append_log
+from scripts.pipeline_core import (
+    ASSEMBLERS,
+    ASSEMBLY_CONTIGS,
+    apply_job_runtime_env,
+    contig_path,
+    filtered_contig_paths,
+    quast_targets,
+)
 from scripts.stage_record import QUAST_EVALUATIONS, StageRecord, quast_stage_id
+from web.job_paths import work_dir_for_job
 from web.pg import connection
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
-ASSEMBLERS = ("spades", "unicycler", "shovill", "megahit")
-ASSEMBLY_CONTIGS = {
-    "spades": "contigs.fasta",
-    "unicycler": "assembly.fasta",
-    "shovill": "contigs.fa",
-    "megahit": "final.contigs.fa",
-}
-
-
-def work_dir_for_job(job: dict) -> Path:
-    """Pipeline outdir is jobs/<id>/work; jobs.output_dir stores .../output."""
-    output = Path(job["output_dir"])
-    work = output.parent / "work"
-    if work.is_dir() or not output.exists():
-        return work
-    return output / "outputs"
 
 
 def _run_script(
@@ -40,7 +33,10 @@ def _run_script(
     versions_path: Path,
     thread_count: int,
     job_id: str,
+    *,
     memory_gib: int | None = None,
+    step_name: str | None = None,
+    step_id: str | None = None,
 ) -> None:
     command = [
         sys.executable,
@@ -52,13 +48,14 @@ def _run_script(
         str(versions_path),
     ]
     append_log(log_path, "\n== {} ==\nCOMMAND: {}\n".format(script, " ".join(command)))
-    env = os.environ.copy()
-    env["_ASSEMBLY_ASSIGNED_THREADS"] = str(thread_count)
-    env["_ASSEMBLY_JOB_ID"] = str(job_id)
-    if memory_gib is not None:
-        env["_ASSEMBLY_METHOD_MEMORY_GIB"] = str(memory_gib)
-    # Label docker containers with step when executor reads env.
-    env["_ASSEMBLY_STEP_NAME"] = Path(script).stem
+    env = apply_job_runtime_env(
+        os.environ.copy(),
+        job_id=job_id,
+        thread_count=thread_count,
+        memory_gib=memory_gib,
+        step_name=step_name or Path(script).stem,
+        step_id=step_id,
+    )
     completed = subprocess.run(
         command,
         env=env,
@@ -114,6 +111,9 @@ def run_fastp_step(job: dict, step: dict) -> None:
             versions_path,
             int(job["threads"]),
             str(job["id"]),
+            memory_gib=job.get("_memory_gib"),
+            step_name="fastp",
+            step_id=str(step["id"]),
         )
         stages.finish("fastp", exit_code=0)
     except Exception as error:
@@ -158,10 +158,12 @@ def run_assembly_step(job: dict, step: dict) -> None:
             method_versions,
             int(job["threads"]),
             str(job["id"]),
+            memory_gib=job.get("_memory_gib"),
+            step_name=method,
+            step_id=str(step["id"]),
         )
-        contigs = outdir / "assemblies" / method / ASSEMBLY_CONTIGS[method]
-        filtered_500 = outdir / "assemblies" / method / "contigs_gt500bp.fasta"
-        filtered_1000 = outdir / "assemblies" / method / "contigs_gt1000bp.fasta"
+        contigs = contig_path(outdir, method)
+        filtered_500, filtered_1000 = filtered_contig_paths(outdir, method)
         stages.note(method, "正在按长度过滤 contig")
         filter_cmd = [
             sys.executable,
@@ -200,26 +202,17 @@ def run_assembly_step(job: dict, step: dict) -> None:
 def run_quast_step(job: dict, step: dict) -> None:
     method = (step["software"] or step["step_name"] or "").removeprefix("quast:")
     if method not in ASSEMBLERS:
-        # step_name like quast:spades
         name = step["step_name"]
         method = name.split(":", 1)[1] if name.startswith("quast:") else name
     outdir = work_dir_for_job(job)
-    contigs = outdir / "assemblies" / method / ASSEMBLY_CONTIGS[method]
-    filtered_500 = outdir / "assemblies" / method / "contigs_gt500bp.fasta"
-    filtered_1000 = outdir / "assemblies" / method / "contigs_gt1000bp.fasta"
     method_log = outdir / "logs" / "{}.log".format(method)
     method_versions = outdir / "logs" / "{}.versions.txt".format(method)
     stages = StageRecord(
         outdir / "stages.json", json.loads(job["assemblers"]), resume=True
     )
-    evaluations = [
-        (contigs, outdir / "quast" / method, "original"),
-        (filtered_500, outdir / "quast" / method / "gt500bp", ">500 bp"),
-        (filtered_1000, outdir / "quast" / method / "gt1000bp", ">1000 bp"),
-    ]
     failures = 0
     for (evaluation, quast_dir, label), (evaluation_id, evaluation_label) in zip(
-        evaluations, QUAST_EVALUATIONS
+        quast_targets(outdir, method), QUAST_EVALUATIONS
     ):
         stage_id = quast_stage_id(method, evaluation_id)
         try:
@@ -235,6 +228,9 @@ def run_quast_step(job: dict, step: dict) -> None:
                 method_versions,
                 int(job["threads"]),
                 str(job["id"]),
+                memory_gib=job.get("_memory_gib"),
+                step_name=step["step_name"],
+                step_id=str(step["id"]),
             )
             stages.finish(stage_id, exit_code=0)
         except Exception as error:
@@ -306,3 +302,16 @@ def run_summary_step(job: dict, step: dict) -> None:
     stages = StageRecord(outdir / "stages.json", selected, resume=True)
     stages.start("comparison")
     stages.finish("comparison", exit_code=0)
+
+
+# Re-export for callers that imported contig map from this module.
+__all__ = [
+    "ASSEMBLERS",
+    "ASSEMBLY_CONTIGS",
+    "load_job",
+    "run_assembly_step",
+    "run_fastp_step",
+    "run_quast_step",
+    "run_summary_step",
+    "work_dir_for_job",
+]

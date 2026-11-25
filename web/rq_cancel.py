@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from web.pg import connection
+from web.sqlite_mirror import mirror_job_status, sync_sqlite_steps_from_disk
 from web.step_store import utc_now
 from web.task_backend import use_rq_pipeline
 
@@ -46,6 +47,8 @@ def cancel_rq_job(job_id: str) -> None:
                 """,
                 (now, now, job_id),
             )
+    mirror_job_status(job_id, "cancelled", "job cancelled")
+    sync_sqlite_steps_from_disk(job_id)
     try:
         from scripts.docker_executor import get_executor, tool_runtime
 

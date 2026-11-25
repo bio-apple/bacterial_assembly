@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import sqlite3
-import tarfile
 from pathlib import Path
 
+from scripts.assembly_outcome import finished_status, read_outcome
+from web.job_paths import work_dir_for_job
+from web.job_publish import archive_results_dir, publish_work_to_output
 from web.pg import connection
 from web.queueing import enqueue_step
-from web.step_runners import ASSEMBLY_CONTIGS, work_dir_for_job
 from web.step_store import new_id, utc_now
+from web.sqlite_mirror import mirror_job_archive, mirror_job_status, sync_sqlite_steps_from_disk
 
 
 def plan_and_insert_job(
@@ -247,7 +246,8 @@ def _fail_job(job_id: str, error: str) -> None:
                 """,
                 (error, utc_now(), utc_now(), job_id),
             )
-    _mirror_sqlite_status(job_id, "failed", error)
+    mirror_job_status(job_id, "failed", error)
+    sync_sqlite_steps_from_disk(job_id)
     _publish_and_archive(job_id)
 
 
@@ -266,15 +266,21 @@ def _finalize_job(job_id: str) -> None:
             assemblies = cur.fetchall()
     if job is None:
         return
-    selected = json.loads(job["assemblers"])
-    successful = [row["step_name"] for row in assemblies if row["status"] == "succeeded"]
-    failed = [row["step_name"] for row in assemblies if row["status"] != "succeeded"]
-    if not successful:
-        status = "failed"
-    elif failed:
-        status = "partial_success"
+    work = work_dir_for_job(job)
+    payload = read_outcome(work)
+    if payload is not None:
+        status = finished_status(payload["exit_code"], work)
     else:
-        status = "succeeded"
+        successful = [
+            row["step_name"] for row in assemblies if row["status"] == "succeeded"
+        ]
+        failed = [row["step_name"] for row in assemblies if row["status"] != "succeeded"]
+        if not successful:
+            status = "failed"
+        elif failed:
+            status = "partial_success"
+        else:
+            status = "succeeded"
     with connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -285,36 +291,9 @@ def _finalize_job(job_id: str) -> None:
                 """,
                 (status, utc_now(), utc_now(), job_id),
             )
-    _mirror_sqlite_status(job_id, status, None)
+    mirror_job_status(job_id, status, None)
+    sync_sqlite_steps_from_disk(job_id)
     _publish_and_archive(job_id)
-
-
-def _mirror_sqlite_status(job_id: str, status: str, error: str | None) -> None:
-    database = os.environ.get("ASSEMBLY_SQLITE_PATH", "").strip()
-    if not database:
-        data_root = os.environ.get("ASSEMBLY_DATA_ROOT", "").strip()
-        if data_root:
-            database = str(Path(data_root) / "database" / "jobs.sqlite3")
-    if not database or not Path(database).is_file():
-        return
-    try:
-        db = sqlite3.connect(database, timeout=30)
-        try:
-            db.execute(
-                """
-                UPDATE jobs
-                SET status = ?, error = ?, completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-                    worker_pid = NULL, process_group_id = NULL, process_started_at = NULL
-                WHERE id = ?
-                """,
-                (status, error, job_id),
-            )
-            db.commit()
-        finally:
-            db.close()
-    except sqlite3.Error:
-        return
 
 
 def _publish_and_archive(job_id: str) -> None:
@@ -327,75 +306,17 @@ def _publish_and_archive(job_id: str) -> None:
     output_dir = Path(job["output_dir"])
     work = work_dir_for_job(job)
     if work.is_dir() and output_dir.name == "output":
-        _publish_directory(work, output_dir)
+        publish_work_to_output(work, output_dir)
         archived_dir = output_dir
     else:
         archived_dir = work if work.is_dir() else output_dir
-    data_root = os.environ.get("ASSEMBLY_DATA_ROOT", "").strip()
-    if not data_root:
+    archive_path = archive_results_dir(job_id, archived_dir)
+    if archive_path is None:
         return
-    archive_path = Path(data_root) / "archive" / "{}.tar.gz".format(job_id)
-    archive_path.parent.mkdir(parents=True, exist_ok=True)
-    partial = archive_path.with_name(archive_path.name + ".partial")
-    try:
-        partial.unlink(missing_ok=True)
-        with tarfile.open(partial, "w:gz") as archive:
-            archive.add(
-                archived_dir,
-                arcname="results",
-                recursive=True,
-                filter=lambda member: None if member.issym() else member,
+    with connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE jobs SET archive_path = %s, archived_at = %s WHERE id = %s",
+                (str(archive_path), utc_now(), job_id),
             )
-        if partial.is_file() and partial.stat().st_size > 0:
-            partial.replace(archive_path)
-            with connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "UPDATE jobs SET archive_path = %s, archived_at = %s WHERE id = %s",
-                        (str(archive_path), utc_now(), job_id),
-                    )
-            _mirror_sqlite_archive(job_id, str(archive_path))
-    except OSError:
-        partial.unlink(missing_ok=True)
-
-
-def _mirror_sqlite_archive(job_id: str, archive_path: str) -> None:
-    database = os.environ.get("ASSEMBLY_SQLITE_PATH", "").strip()
-    if not database:
-        data_root = os.environ.get("ASSEMBLY_DATA_ROOT", "").strip()
-        if data_root:
-            database = str(Path(data_root) / "database" / "jobs.sqlite3")
-    if not database or not Path(database).is_file():
-        return
-    try:
-        db = sqlite3.connect(database, timeout=30)
-        try:
-            db.execute(
-                "UPDATE jobs SET archive_path = ?, archived_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
-                (archive_path, job_id),
-            )
-            db.commit()
-        finally:
-            db.close()
-    except sqlite3.Error:
-        return
-
-
-def _publish_directory(source: Path, destination: Path) -> None:
-    incoming = destination.with_name(destination.name + ".incoming")
-    if incoming.exists():
-        shutil.rmtree(incoming)
-    shutil.copytree(source, incoming)
-    if destination.exists():
-        shutil.rmtree(destination)
-    incoming.rename(destination)
-    # Clear work dir contents but keep directory for path stability.
-    for child in source.iterdir():
-        if child.is_dir():
-            shutil.rmtree(child)
-        else:
-            child.unlink(missing_ok=True)
-
-
-# Silence unused import lint for contig map documentation.
-_ = ASSEMBLY_CONTIGS
+    mirror_job_archive(job_id, str(archive_path))

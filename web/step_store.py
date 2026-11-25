@@ -181,6 +181,46 @@ def set_container(step_id: str, container_id: str, image_ref: str | None = None)
             )
 
 
+def job_cancel_requested(job_id: str) -> bool:
+    try:
+        with connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT status, cancel_requested FROM jobs WHERE id = %s",
+                    (job_id,),
+                )
+                job = cur.fetchone()
+    except Exception:
+        return False
+    if job is None:
+        return False
+    return bool(job["cancel_requested"]) or job["status"] in {"cancelling", "cancelled"}
+
+
+def reclaim_stale_running_steps(max_age_seconds: int = 7200) -> int:
+    """Mark abandoned running steps failed so ADR-0018 infra retry can re-enqueue."""
+    try:
+        with connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE job_steps
+                    SET status = 'failed',
+                        error = COALESCE(error, 'stale running step reclaimed'),
+                        completed_at = %s,
+                        updated_at = %s
+                    WHERE status = 'running'
+                      AND updated_at < (NOW() - (%s * INTERVAL '1 second'))
+                    RETURNING id
+                    """,
+                    (utc_now(), utc_now(), max_age_seconds),
+                )
+                rows = cur.fetchall()
+        return len(rows)
+    except Exception:
+        return 0
+
+
 def heartbeat_job(job_id: str, worker_id: str) -> None:
     with connection() as conn:
         with conn.cursor() as cur:

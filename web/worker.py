@@ -19,7 +19,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from scripts.assembly_outcome import finished_status
-from scripts.stage_record import load_stage_record
 from web.app import create_app
 from web.errors import WORKER_INTERRUPTED, explain_job_failure
 from web.job_paths import load_job_stage_record
@@ -528,7 +527,15 @@ def _persist_job_steps(database: Path, job_id: str) -> None:
         return
     if not isinstance(assemblers, list):
         return
-    record = load_job_stage_record(Path(row["output_dir"]))
+    data_root = os.environ.get("ASSEMBLY_DATA_ROOT", "").strip()
+    try:
+        if data_root:
+            output_dir = contained_path(Path(data_root), row["output_dir"])
+        else:
+            output_dir = Path(row["output_dir"])
+    except (OSError, RuntimeError, ValueError):
+        output_dir = Path(row["output_dir"])
+    record = load_job_stage_record(output_dir)
     with connect(database) as db:
         sync_job_steps(db, job_id, assemblers, record, row["status"])
 
@@ -674,7 +681,7 @@ def _log_text(log_path: Path | None) -> str:
 def _stages(pipeline_output_dir: Path | None):
     if pipeline_output_dir is None:
         return []
-    return load_stage_record(pipeline_output_dir / "stages.json").get("stages") or []
+    return load_job_stage_record(pipeline_output_dir).get("stages") or []
 
 
 def build_pipeline_command(

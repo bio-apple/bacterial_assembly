@@ -3,12 +3,28 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Mapping
 
 from scripts.stage_record import load_stage_record
 
 
 def job_work_dir(output_dir: Path) -> Path:
     return output_dir.parent / "work"
+
+
+def work_dir_for_job(job: Mapping | Path | str) -> Path:
+    """Resolve pipeline outdir (prefer jobs/<id>/work; fall back to legacy layouts)."""
+    if isinstance(job, Mapping):
+        output = Path(job["output_dir"])
+    else:
+        output = Path(job)
+    work = job_work_dir(output)
+    if work.is_dir() or not output.exists():
+        return work
+    legacy = output / "outputs"
+    if legacy.is_dir():
+        return legacy
+    return work
 
 
 def stage_record_candidates(output_dir: Path) -> tuple[Path, ...]:

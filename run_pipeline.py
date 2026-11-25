@@ -19,6 +19,7 @@ from scripts.common import (
     validate_reads,
     validate_sample,
 )
+from scripts.pipeline_core import ASSEMBLERS, ASSEMBLY_CONTIGS, contig_path, filtered_contig_paths, quast_targets
 from scripts.resource_budget import read_runtime_limits
 from scripts.run_spades import parse_kmers
 from scripts.stage_record import QUAST_EVALUATIONS, StageRecord, quast_stage_id
@@ -26,13 +27,6 @@ from scripts.stage_record import QUAST_EVALUATIONS, StageRecord, quast_stage_id
 
 ROOT = Path(__file__).resolve().parent
 SCRIPTS = ROOT / "scripts"
-ASSEMBLERS = ("spades", "unicycler", "shovill", "megahit")
-ASSEMBLY_CONTIGS = {
-    "spades": "contigs.fasta",
-    "unicycler": "assembly.fasta",
-    "shovill": "contigs.fa",
-    "megahit": "final.contigs.fa",
-}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -247,13 +241,8 @@ def run_assembler(
             stream_lock=log_lock,
             log_prefix=log_prefix,
         )
-        contigs = outdir / "assemblies" / assembler / ASSEMBLY_CONTIGS[assembler]
-        filtered_500 = (
-            outdir / "assemblies" / assembler / "contigs_gt500bp.fasta"
-        )
-        filtered_1000 = (
-            outdir / "assemblies" / assembler / "contigs_gt1000bp.fasta"
-        )
+        contigs = contig_path(outdir, assembler)
+        filtered_500, filtered_1000 = filtered_contig_paths(outdir, assembler)
         stages.note(assembler, "正在按长度过滤 contig")
         run_contig_filter(
             contigs,
@@ -272,21 +261,8 @@ def run_assembler(
         _record_method_error(error, method_log, root_log, log_lock, log_prefix)
         return assembler, False
 
-    evaluations = [
-        (contigs, outdir / "quast" / assembler, "original"),
-        (
-            filtered_500,
-            outdir / "quast" / assembler / "gt500bp",
-            ">500 bp",
-        ),
-        (
-            filtered_1000,
-            outdir / "quast" / assembler / "gt1000bp",
-            ">1000 bp",
-        ),
-    ]
     for (evaluation, quast_dir, label), (evaluation_id, evaluation_label) in zip(
-        evaluations, QUAST_EVALUATIONS
+        quast_targets(outdir, assembler), QUAST_EVALUATIONS
     ):
         stage_id = quast_stage_id(assembler, evaluation_id)
         try:

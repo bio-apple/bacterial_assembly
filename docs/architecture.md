@@ -57,17 +57,18 @@ Redis 消息只带 `step_id` 等调度元数据；路径与参数以 PostgreSQL 
 
 ## 状态
 
-**分析任务**（Web / SQLite）：`queued` | `running` | `cancelling` | `cancelled` | `succeeded` | `partial_success` | `failed`
+**分析任务**（Web / SQLite 读模型）：`queued` | `running` | `cancelling` | `cancelled` | `succeeded` | `partial_success` | `failed`
 
 - fastp 失败 → `failed`
 - 全部所选组装失败 → `failed`
 - 至少一种组装成功且至少一种失败 → `partial_success`
-- 全部组装成功 → `succeeded`（QUAST 失败不改变该终态）
+- 全部组装成功 → `succeeded`（QUAST 失败不改变该终态；终态以 `assembly_outcome.json` + `finished_status` 裁决）
 - 取消保留已完成产物
+- RQ 路径会把运行中/终态镜像回 SQLite；步骤表优先来自 `stages.json` 同步，空表时由 PostgreSQL 适配器补齐
 
 **工作项**（PostgreSQL `job_steps`）：`pending` | `queued` | `running` | `succeeded` | `failed` | `cancelled` | `skipped`
 
-结果目录另有 `stages.json`、`assembly_outcome.json`（组装成败列表）。
+结果目录另有 `stages.json`、`assembly_outcome.json`（组装成败列表）。工具容器启动后写入 `container_id`；取消按任务标签停止容器；超时未心跳的 `running` 可被回收为失败以便基础设施重试。
 
 ## 幂等与重试
 

@@ -63,12 +63,27 @@ class NoopJobTests(unittest.TestCase):
             "worker_type": "qc",
             "status": "running",
         }
-        with mock.patch.object(rq_jobs, "claim_step", return_value=claimed):
-            with mock.patch.object(rq_jobs, "heartbeat_job"):
-                with mock.patch.object(rq_jobs.step_runners, "load_job", return_value={"id": "j1"}):
-                    with mock.patch.object(rq_jobs, "finish_step") as finish:
-                        with mock.patch.object(rq_jobs, "on_step_finished") as nxt:
-                            result = rq_jobs.run_qc_step("s1")
+        with mock.patch.object(rq_jobs, "reclaim_stale_running_steps", return_value=0):
+            with mock.patch.object(rq_jobs, "claim_step", return_value=claimed):
+                with mock.patch.object(rq_jobs, "heartbeat_job"):
+                    with mock.patch.object(rq_jobs, "mirror_job_status"):
+                        with mock.patch.object(rq_jobs, "job_cancel_requested", return_value=False):
+                            with mock.patch.object(
+                                rq_jobs, "_apply_resource_env"
+                            ):
+                                with mock.patch.object(
+                                    rq_jobs.step_runners,
+                                    "load_job",
+                                    return_value={"id": "j1", "threads": 1},
+                                ):
+                                    with mock.patch.object(rq_jobs, "finish_step") as finish:
+                                        with mock.patch.object(
+                                            rq_jobs, "on_step_finished"
+                                        ) as nxt:
+                                            with mock.patch.object(
+                                                rq_jobs, "sync_sqlite_steps_from_disk"
+                                            ):
+                                                result = rq_jobs.run_qc_step("s1")
         self.assertEqual(result, "succeeded")
         finish.assert_called_once()
         self.assertEqual(finish.call_args.kwargs["status"], "succeeded")
@@ -77,8 +92,9 @@ class NoopJobTests(unittest.TestCase):
     def test_claim_none_skips(self):
         from web import rq_jobs
 
-        with mock.patch.object(rq_jobs, "claim_step", return_value=None):
-            self.assertEqual(rq_jobs.run_assembly_step("s1"), "skipped")
+        with mock.patch.object(rq_jobs, "reclaim_stale_running_steps", return_value=0):
+            with mock.patch.object(rq_jobs, "claim_step", return_value=None):
+                self.assertEqual(rq_jobs.run_assembly_step("s1"), "skipped")
 
 
 if __name__ == "__main__":

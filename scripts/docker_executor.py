@@ -75,6 +75,15 @@ def _job_id() -> str | None:
     return value or None
 
 
+def _job_cancel_requested(job_id: str) -> bool:
+    try:
+        from web.step_store import job_cancel_requested
+
+        return job_cancel_requested(job_id)
+    except Exception:
+        return False
+
+
 def mount_roots_for(command: Sequence[str]) -> list[Path]:
     roots: set[Path] = set()
     data_root = os.environ.get("ASSEMBLY_DATA_ROOT", "").strip()
@@ -192,8 +201,16 @@ class DockerExecutor:
                 network_mode="none",
                 privileged=False,
             )
+            step_id = os.environ.get("_ASSEMBLY_STEP_ID", "").strip()
+            if step_id:
+                try:
+                    from web.step_store import set_container
+
+                    set_container(step_id, container.id, image)
+                except Exception:
+                    pass
             try:
-                self._stream_logs(container, log_file, timeout=timeout)
+                self._stream_logs(container, log_file, timeout=timeout, job_id=job_id)
                 result = container.wait()
                 status = int(result.get("StatusCode", 1))
             finally:
@@ -204,18 +221,29 @@ class DockerExecutor:
         if status:
             raise subprocess.CalledProcessError(status, argv)
 
-    def _stream_logs(self, container, log_file, timeout: float | None) -> None:
+    def _stream_logs(
+        self, container, log_file, timeout: float | None, job_id: str | None = None
+    ) -> None:
         deadline = None if timeout is None else time.monotonic() + timeout
+        last_cancel_check = 0.0
         try:
             for chunk in container.logs(stream=True, follow=True, stdout=True, stderr=True):
-                if deadline is not None and time.monotonic() > deadline:
+                now = time.monotonic()
+                if deadline is not None and now > deadline:
                     container.stop(timeout=10)
                     raise TimeoutError("container timed out for {}".format(container.id))
+                if job_id and now - last_cancel_check >= 2.0:
+                    last_cancel_check = now
+                    if _job_cancel_requested(job_id):
+                        container.stop(timeout=10)
+                        raise RuntimeError("job cancelled")
                 text = chunk.decode("utf-8", "replace") if isinstance(chunk, bytes) else str(chunk)
                 print(text, end="", flush=True)
                 log_file.write(text)
                 log_file.flush()
         except TimeoutError:
+            raise
+        except RuntimeError:
             raise
         except Exception:
             # Fall back to waiting if log stream ends early.
@@ -226,6 +254,9 @@ class DockerExecutor:
                 if deadline is not None and time.monotonic() > deadline:
                     container.stop(timeout=10)
                     raise TimeoutError("container timed out for {}".format(container.id))
+                if job_id and _job_cancel_requested(job_id):
+                    container.stop(timeout=10)
+                    raise RuntimeError("job cancelled")
                 time.sleep(0.2)
 
     def stop_job_containers(self, job_id: str, grace_seconds: float = 5.0) -> int:
