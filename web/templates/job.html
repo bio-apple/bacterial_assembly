@@ -112,8 +112,8 @@
             <h2 id="step-title">分析步骤</h2>
             <p>一个组装方法失败时，其余步骤仍继续。时间为步骤读模型中的真实字段。</p>
           </div>
-          <p id="step-ledger-empty" class="report-note"{% if detail.steps %} hidden{% endif %}>还没有步骤记录。</p>
-          <div class="compare-scroll" id="step-ledger-table"{% if not detail.steps %} hidden{% endif %}>
+          <p id="step-ledger-empty" class="report-note"{% if work_items %} hidden{% endif %}>还没有步骤记录。</p>
+          <div class="compare-scroll" id="step-ledger-table"{% if not work_items %} hidden{% endif %}>
             <table class="compare-table step-sheet">
               <thead>
                 <tr>
@@ -124,8 +124,8 @@
                   <th>耗时</th>
                 </tr>
               </thead>
-              <tbody id="step-ledger-body"{% if not detail.steps %} hidden{% endif %}>
-                {% for step in detail.steps %}
+              <tbody id="step-ledger-body"{% if not work_items %} hidden{% endif %}>
+                {% for step in work_items %}
                 <tr>
                   <th scope="row">{{ step.label }}{% if step.error %}<small>{{ step.error }}</small>{% endif %}{% if step.exit_code is not none %}<span class="checksum">退出码 {{ step.exit_code }}</span>{% endif %}</th>
                   <td>{{ status_pill(step.status) }}</td>

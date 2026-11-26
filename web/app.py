@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import csv
 import errno
 import hashlib
 import hmac
@@ -7,13 +6,11 @@ import json
 import os
 import re
 import secrets
-import shutil
 import sqlite3
 import tempfile
 import time
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path, PurePosixPath
 
@@ -22,7 +19,6 @@ from flask import (
     abort,
     current_app,
     flash,
-    get_flashed_messages,
     jsonify,
     redirect,
     render_template,
@@ -34,20 +30,6 @@ from flask import (
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash
-from werkzeug.utils import secure_filename
-
-from scripts.resource_budget import read_runtime_limits
-from web.ingest import validate_fastq_for_analysis, validate_read_pair_for_job
-from web.reports import (
-    THRESHOLD_ABSENT,
-    assemble_report_model,
-    qc_sheet,
-    report_tsv,
-    resource_lines,
-    result_sources_present,
-    scope_comparison,
-    selected_assemblers,
-)
 from web.errors import (
     DISK_FULL,
     FASTQ_CHECK_UNAVAILABLE,
@@ -72,54 +54,19 @@ from web.db_sqlite import (
     relocate_legacy_database,
 )
 from web.fastq_check import FastqCheckUnavailable, FastqRecordError
-from web.host_monitor import format_bytes, snapshot
-from web.modules import ANALYSIS_MODULES, BACTERIAL_ASSEMBLY_MODULE_ID, group_enabled_modules
-from web.notices import note_disk, note_job
-from web.storage_paths import append_job_log, contained_path, is_inside
-from web.job_support import (
-    ASSEMBLERS,
-    FINISHED_STATUSES,
-    JOB_STATUS_LABELS,
-    align_comparison,
+from web.modules import ANALYSIS_MODULES
+from web.notices import note_disk
+from web.job_serialize import elapsed_seconds, format_duration
+from web.storage_paths import contained_path, is_inside
+from web.upload_io import (
     assemble_upload,
-    chunk_byte_length,
-    column_value,
-    comparison_file,
-    copy_job_inputs,
-    data_file,
-    elapsed_seconds,
-    fastp_html_file,
     fastq_extension,
-    first_pipeline_text,
-    format_duration,
-    host_view,
-    input_facts,
-    inputs_ready,
-    load_fastp_documents,
-    notable_output_files,
-    output_name_rejected,
-    parse_byte_size,
-    parse_comparison_text,
-    parse_comparison_tsv,
-    parse_filter_date,
-    parse_positive_int,
-    pipeline_comparisons,
-    pipeline_directories,
     received_indexes,
-    resolve_output_file,
-    serialize_job,
     serialize_upload,
     session_directory,
-    store_report_files,
     valid_fastq_filename,
     validated_fastq_name,
-    write_exact_stream,
-    write_regular_file,
-    send_regular_report,
 )
-from web.step_read_model import job_step_view
-
-JOB_STATUSES = ("queued", "running", "cancelling", "cancelled", "succeeded", "partial_success", "failed")
 PATH_FIELDS = {
     "path",
     "dest",
@@ -176,49 +123,6 @@ def configure_storage(app: Flask) -> None:
     os.environ["TMP"] = temp_root
     os.environ["TEMP"] = temp_root
     tempfile.tempdir = temp_root
-
-
-def discard_stored_files(files: list[Path], directories: list[Path]) -> None:
-    for path in files:
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
-    for directory in directories:
-        try:
-            directory.rmdir()
-        except OSError:
-            pass
-
-
-def reuse_or_create_sample(db: sqlite3.Connection, owner: str, name: str) -> str:
-    existing = db.execute(
-        "SELECT id FROM samples WHERE owner = ? AND name = ?",
-        (owner, name),
-    ).fetchone()
-    if existing:
-        return existing[0]
-    sample_id = str(uuid.uuid4())
-    try:
-        db.execute(
-            "INSERT INTO samples (id, owner, name) VALUES (?, ?, ?)",
-            (sample_id, owner, name),
-        )
-    except sqlite3.IntegrityError:
-        existing = db.execute(
-            "SELECT id FROM samples WHERE owner = ? AND name = ?",
-            (owner, name),
-        ).fetchone()
-        if existing is None:
-            raise
-        return existing[0]
-    return sample_id
-
-
-def checksum_or_none(value) -> str | None:
-    if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value):
-        return value
-    return None
 
 
 def env_flag(name: str, default: bool) -> bool:
@@ -448,116 +352,6 @@ def create_app(test_config: dict | None = None) -> Flask:
             abort(404)
         return row
 
-    def linked_sample(row: sqlite3.Row) -> tuple[str, dict | None]:
-        sample_name = row["sample"]
-        sample_id = column_value(row, "sample_id")
-        batch_id = column_value(row, "sequencing_batch_id")
-        batch = None
-        with connection() as db:
-            if sample_id:
-                found = db.execute(
-                    "SELECT name FROM samples WHERE id = ? AND owner = ?",
-                    (sample_id, row["owner"]),
-                ).fetchone()
-                if found:
-                    sample_name = found["name"]
-            if sample_id and batch_id:
-                found_batch = db.execute(
-                    "SELECT r1_filename, r2_filename, r1_sha256, r2_sha256 "
-                    "FROM sequencing_batches WHERE id = ? AND owner = ? AND sample_id = ?",
-                    (batch_id, row["owner"], sample_id),
-                ).fetchone()
-                if found_batch:
-                    batch = {
-                        "r1_filename": found_batch["r1_filename"],
-                        "r2_filename": found_batch["r2_filename"],
-                        "r1_sha256": found_batch["r1_sha256"],
-                        "r2_sha256": found_batch["r2_sha256"],
-                    }
-        return sample_name, batch
-
-    def job_detail(row: sqlite3.Row, step_view: dict | None = None) -> dict:
-        sample_name, batch = linked_sample(row)
-        directories = pipeline_directories(row["output_dir"])
-        run_log = first_pipeline_text(directories, "run.log", 2 * 1024 * 1024)
-        resources = resource_lines(row["threads"], run_log)
-        assemblers = selected_assemblers(row["assemblers"])
-        comparison_text = first_pipeline_text(directories, "comparison.tsv", 2 * 1024 * 1024)
-        parsed = parse_comparison_text(comparison_text)
-        view = step_view if step_view is not None else job_step_view(row)
-        work_items = view["work_items"]
-        comparisons = pipeline_comparisons(
-            row["output_dir"], assemblers, parsed, directories, work_items=work_items
-        )
-        return {
-            "sample_name": sample_name,
-            "sample_id": column_value(row, "sample_id"),
-            "sequencing_batch_id": column_value(row, "sequencing_batch_id"),
-            "batch": batch,
-            "inputs": input_facts(row),
-            "parameters": {
-                "assemblers": assemblers or [],
-                "spades_kmers": row["spades_kmers"],
-                "spades_careful": bool(row["spades_careful"]),
-            },
-            "resources": resources,
-            "comparison": comparisons[0],
-            "comparisons": comparisons,
-            "steps": work_items,
-            "qc": qc_sheet(load_fastp_documents(directories)),
-            "fastp_html": fastp_html_file(directories) is not None,
-            "report_ready": result_sources_present(
-                first_pipeline_text(directories, "versions.txt", 1024 * 1024),
-                load_fastp_documents(directories),
-                parsed,
-                view["failures"],
-            ),
-            "inputs_available": inputs_ready(row),
-        }
-
-    def job_report_model(row: sqlite3.Row) -> dict | None:
-        sample_name, batch = linked_sample(row)
-        directories = pipeline_directories(row["output_dir"])
-        versions_text = first_pipeline_text(directories, "versions.txt", 1024 * 1024)
-        fastp_documents = load_fastp_documents(directories)
-        comparison_rows = parse_comparison_text(
-            first_pipeline_text(directories, "comparison.tsv", 2 * 1024 * 1024)
-        )
-        step_view = job_step_view(row)
-        failures = step_view["failures"]
-        if not result_sources_present(
-            versions_text, fastp_documents, comparison_rows, failures
-        ):
-            return None
-        assemblers = selected_assemblers(row["assemblers"])
-        comparisons = pipeline_comparisons(
-            row["output_dir"],
-            assemblers,
-            comparison_rows,
-            directories,
-            work_items=step_view["work_items"],
-        )
-        resources = resource_lines(
-            row["threads"],
-            first_pipeline_text(directories, "run.log", 2 * 1024 * 1024),
-        )
-        return assemble_report_model(
-            sample_name=sample_name,
-            status_label=JOB_STATUS_LABELS.get(row["status"], row["status"]),
-            batch=batch,
-            inputs=input_facts(row),
-            assemblers=assemblers,
-            spades_kmers=row["spades_kmers"],
-            spades_careful=bool(row["spades_careful"]),
-            resources=resources,
-            versions_text=versions_text,
-            fastp_documents=fastp_documents,
-            comparison_rows=comparison_rows,
-            job_error=row["error"],
-            stage_failures=failures,
-            comparisons=comparisons,
-        )
-
     @app.get("/login")
     def login():
         if session.get("username"):
@@ -598,286 +392,6 @@ def create_app(test_config: dict | None = None) -> Flask:
         require_csrf()
         session.clear()
         return redirect(url_for("login"))
-
-    def overview_jobs(owner: str) -> dict:
-        modules = {module["id"]: module for module in app.config["ANALYSIS_MODULES"]}
-        with connection() as db:
-            count_rows = db.execute(
-                "SELECT status, COUNT(*) AS total FROM jobs WHERE owner = ? GROUP BY status",
-                (owner,),
-            ).fetchall()
-            recent_rows = db.execute(
-                "SELECT * FROM jobs WHERE owner = ? ORDER BY sequence DESC LIMIT 6",
-                (owner,),
-            ).fetchall()
-            report_rows = db.execute(
-                "SELECT * FROM jobs WHERE owner = ? AND archive_path IS NOT NULL "
-                "ORDER BY sequence DESC LIMIT 5",
-                (owner,),
-            ).fetchall()
-        counts = {
-            status: 0
-            for status in (
-            "queued",
-            "running",
-            "cancelling",
-            "cancelled",
-            "succeeded",
-            "partial_success",
-            "failed",
-        )
-    }
-        for row in count_rows:
-            if row["status"] in counts:
-                counts[row["status"]] = row["total"]
-
-        def present(row: sqlite3.Row) -> dict:
-            job = serialize_job(row)
-            module = modules.get(job["module_id"], {})
-            job["module_name"] = module.get("name", job["module_id"])
-            job["module_code"] = module.get("code", "—")
-            return job
-
-        reports = []
-        for row in report_rows:
-            job = present(row)
-            if job["archive_available"]:
-                reports.append(job)
-        return {
-            "counts": counts,
-            "active_count": counts["queued"] + counts["running"] + counts["cancelling"],
-            "total_count": sum(counts.values()),
-            "recent_jobs": [present(row) for row in recent_rows],
-            "reports": reports,
-        }
-
-    @app.get("/overview")
-    @login_required
-    def overview():
-        return render_template(
-            "overview.html",
-            username=session["username"],
-            csrf_token=csrf_token(),
-            modules=app.config["ANALYSIS_MODULES"],
-            host=host_view(app.config["DATA_ROOT"]),
-            **overview_jobs(session["username"]),
-        )
-
-    @app.get("/api/host")
-    @login_required
-    def host_status():
-        return jsonify(host=host_view(app.config["DATA_ROOT"]))
-
-    def module_usage(owner: str) -> dict:
-        with connection() as db:
-            rows = db.execute(
-                "SELECT module_id, "
-                "SUM(status = 'queued') AS queued, "
-                "SUM(status = 'running') AS running, "
-                "SUM(status = 'cancelling') AS cancelling, "
-                "MAX(created_at) AS last_used_at "
-                "FROM jobs WHERE owner = ? GROUP BY module_id",
-                (owner,),
-            ).fetchall()
-        return {
-            row["module_id"]: {
-                "queued": row["queued"],
-                "running": row["running"],
-                "cancelling": row["cancelling"],
-                "last_used_at": row["last_used_at"],
-            }
-            for row in rows
-        }
-
-    @app.get("/modules")
-    @login_required
-    def module_index():
-        modules = app.config["ANALYSIS_MODULES"]
-        return render_template(
-            "modules.html",
-            username=session["username"],
-            csrf_token=csrf_token(),
-            modules=modules,
-            categories=group_enabled_modules(
-                modules, module_usage(session["username"])
-            ),
-        )
-
-    def owned_sample_names(owner: str) -> list[str]:
-        with connection() as db:
-            rows = db.execute(
-                "SELECT name FROM samples WHERE owner = ? ORDER BY name",
-                (owner,),
-            ).fetchall()
-        return [row["name"] for row in rows]
-
-    @app.get("/")
-    @login_required
-    def dashboard():
-        return render_template(
-            "dashboard.html",
-            username=session["username"],
-            csrf_token=csrf_token(),
-            assemblers=ASSEMBLERS,
-            samples=owned_sample_names(session["username"]),
-        )
-
-    def history_filters() -> dict:
-        sample = request.args.get("sample", "")
-        if "\x00" in sample:
-            abort(400, description="样本名称不正确。")
-        module_id = request.args.get("module", "")
-        known_modules = {module["id"] for module in app.config["ANALYSIS_MODULES"]}
-        if module_id and module_id not in known_modules:
-            abort(400, description="没有这个分析模块。")
-        status = request.args.get("status", "")
-        if status and status not in JOB_STATUSES:
-            abort(400, description="没有这个任务状态。")
-        start = parse_filter_date(request.args.get("start", ""))
-        end = parse_filter_date(request.args.get("end", ""))
-        if start and end and start > end:
-            abort(400, description="日期范围不正确。")
-        return {
-            "sample": sample,
-            "module": module_id,
-            "status": status,
-            "start": start.isoformat() if start else "",
-            "end": end.isoformat() if end else "",
-            "start_date": start,
-            "end_date": end,
-        }
-
-    def present_history_job(row, modules, current_time) -> dict:
-        job = serialize_job(row)
-        module = modules.get(job["module_id"], {})
-        job["module_name"] = module.get("name", job["module_id"])
-        job["module_code"] = module.get("code", "—")
-        job["log_available"] = data_file(row["log_path"]) is not None
-        job["result_available"] = data_file(row["archive_path"]) is not None
-        job["inputs_available"] = inputs_ready(row)
-        job["result_files"] = notable_output_files(row["output_dir"])
-        job["runtime_seconds"] = elapsed_seconds(
-            job["started_at"], job["completed_at"], current_time
-        )
-        job["runtime_label"] = (
-            "等待开始" if job["runtime_seconds"] is None else format_duration(job["runtime_seconds"])
-        )
-        return job
-
-    @app.get("/history")
-    @login_required
-    def job_history():
-        page = parse_positive_int(request.args.get("page", "1"))
-        if page is None:
-            abort(400, description="page must be a positive integer")
-        filters = history_filters()
-        page_size = 50
-        owner = session["username"]
-        clauses = ["owner = ?"]
-        params: list = [owner]
-        if filters["sample"]:
-            clauses.append("instr(sample, ?) > 0")
-            params.append(filters["sample"])
-        if filters["module"]:
-            clauses.append("module_id = ?")
-            params.append(filters["module"])
-        if filters["status"]:
-            clauses.append("status = ?")
-            params.append(filters["status"])
-        if filters["start_date"]:
-            clauses.append("created_at >= ?")
-            params.append(filters["start"])
-        if filters["end_date"]:
-            clauses.append("created_at < ?")
-            params.append((filters["end_date"] + timedelta(days=1)).isoformat())
-        where = " AND ".join(clauses)
-        with connection() as db:
-            total_count = db.execute(
-                "SELECT COUNT(*) FROM jobs WHERE {}".format(where), tuple(params)
-            ).fetchone()[0]
-            total_pages = max(1, (total_count + page_size - 1) // page_size)
-            page = min(page, total_pages)
-            rows = db.execute(
-                "SELECT * FROM jobs WHERE {} ORDER BY sequence DESC LIMIT ? OFFSET ?".format(where),
-                tuple(params + [page_size, (page - 1) * page_size]),
-            ).fetchall()
-            comparable_rows = db.execute(
-                "SELECT id, sample, status, output_dir, created_at FROM jobs "
-                "WHERE owner = ? AND status IN ('succeeded', 'partial_success', 'failed', 'cancelled') "
-                "ORDER BY sequence DESC",
-                (owner,),
-            ).fetchall()
-
-        modules = {module["id"]: module for module in app.config["ANALYSIS_MODULES"]}
-        current_time = datetime.now(timezone.utc)
-        history_jobs = [present_history_job(row, modules, current_time) for row in rows]
-        comparable_jobs = [
-            {
-                "id": row["id"],
-                "sample": row["sample"],
-                "status": row["status"],
-                "created_at": row["created_at"],
-            }
-            for row in comparable_rows
-            if comparison_file(row["output_dir"]) is not None
-        ]
-        filtered = any(filters[key] for key in ("sample", "module", "status", "start", "end"))
-        view_filters = {key: filters[key] for key in ("sample", "module", "status", "start", "end")}
-        return render_template(
-            "history.html",
-            username=session["username"],
-            csrf_token=csrf_token(),
-            jobs=history_jobs,
-            page=page,
-            total_pages=total_pages,
-            total_count=total_count,
-            filters=view_filters,
-            filtered=filtered,
-            status_choices=JOB_STATUSES,
-            status_labels=JOB_STATUS_LABELS,
-            comparable_jobs=comparable_jobs,
-            messages=get_flashed_messages(),
-        )
-
-    @app.get("/history/compare")
-    @login_required
-    def compare_jobs():
-        left_id = request.args.get("left", "")
-        right_id = request.args.get("right", "")
-        if not left_id or not right_id or left_id == right_id:
-            abort(400, description="请选择两个不同的任务。")
-        left = owned_job(left_id)
-        right = owned_job(right_id)
-        summaries = []
-        for row in (left, right):
-            if row["status"] not in FINISHED_STATUSES:
-                abort(400, description="只有已结束的任务可以比较。")
-            summary_path = comparison_file(row["output_dir"])
-            summary = parse_comparison_tsv(summary_path) if summary_path else []
-            if not summary:
-                abort(400, description="这条任务没有比较表，不能比较。")
-            summaries.append(summary)
-        return render_template(
-            "compare.html",
-            username=session["username"],
-            csrf_token=csrf_token(),
-            left=serialize_job(left),
-            right=serialize_job(right),
-            rows=align_comparison(summaries[0], summaries[1]),
-            status_labels=JOB_STATUS_LABELS,
-        )
-
-    @app.get("/api/jobs")
-    @login_required
-    def list_jobs():
-        with connection() as db:
-            rows = db.execute(
-                "SELECT id, module_id, status, assemblers, threads, sample, archive_path, created_at, "
-                "updated_at, started_at, completed_at, error "
-                "FROM jobs WHERE owner = ? ORDER BY sequence DESC LIMIT 100",
-                (session["username"],),
-            ).fetchall()
-        return jsonify(jobs=[serialize_job(row) for row in rows])
 
     def load_owned_upload(upload_id: str):
         try:
@@ -930,8 +444,6 @@ def create_app(test_config: dict | None = None) -> Flask:
         upload_value_error=upload_value_error,
         csrf_token=csrf_token,
         owned_job=owned_job,
-        job_detail=job_detail,
-        job_report_model=job_report_model,
         load_owned_upload=load_owned_upload,
         require_completed_upload=require_completed_upload,
         upload_payload=upload_payload,

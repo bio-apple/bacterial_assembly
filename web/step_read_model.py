@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from flask import current_app
 
-from scripts.stage_record import planned_stages
+from scripts.pipeline_plan import planned_stages
 from web.pg import connection
 from web.steps import STEP_STATUSES, step_status
 from web.task_backend import use_rq_pipeline

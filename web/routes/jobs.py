@@ -26,12 +26,13 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
-import web.app as app_module
-from web.app import (
-    PATH_FIELDS,
+from scripts.resource_budget import read_runtime_limits
+from web.analysis_task_intake import (
     checksum_or_none,
     discard_stored_files,
-    reuse_or_create_sample,
+    enqueue_analysis_task,
+    insert_new_job_catalog,
+    insert_rerun_job_catalog,
 )
 from web.db_sqlite import relocate_file
 from web.errors import (
@@ -44,27 +45,26 @@ from web.errors import (
 )
 from web.fastq_check import FastqCheckUnavailable
 from web.ingest import validate_fastq_for_analysis, validate_read_pair_for_job
-from web.job_support import (
-    ASSEMBLERS,
-    column_value,
+from web.job_artifacts import (
     copy_job_inputs,
-    data_file,
     fastp_html_file,
-    fastq_extension,
     inputs_ready,
     pipeline_directories,
     resolve_output_file,
-    send_regular_report,
-    serialize_job,
-    session_directory,
-    store_report_files,
-    valid_fastq_filename,
 )
+from web.job_presentation import job_detail, job_report_model
+from web.job_serialize import ASSEMBLERS, data_file, serialize_job
 from web.modules import BACTERIAL_ASSEMBLY_MODULE_ID
 from web.notices import note_job
+from web.report_io import send_regular_report, store_report_files
 from web.reports import report_tsv
 from web.step_read_model import job_step_view
 from web.storage_paths import append_job_log, contained_path
+from web.upload_io import (
+    fastq_extension,
+    session_directory,
+    valid_fastq_filename,
+)
 
 
 def register_routes(bp: Blueprint, hooks) -> None:
@@ -76,9 +76,8 @@ def register_routes(bp: Blueprint, hooks) -> None:
     csrf_token = hooks.csrf_token
     connection = hooks.connection
     owned_job = hooks.owned_job
-    job_detail = hooks.job_detail
-    job_report_model = hooks.job_report_model
     require_completed_upload = hooks.require_completed_upload
+    path_fields = hooks.PATH_FIELDS
 
     def rerun_response(payload: dict, status_code: int):
         wants_json = bool(request.headers.get("X-CSRF-Token")) or (
@@ -116,7 +115,7 @@ def register_routes(bp: Blueprint, hooks) -> None:
         ):
             return fail("parameter_invalid", parameter_message("组装软件的顺序与所选工具不一致。"), 400)
         try:
-            threads = app_module.read_runtime_limits()["method_threads"]
+            threads = read_runtime_limits()["method_threads"]
         except (OSError, RuntimeError, ValueError):
             current_app.logger.exception("Could not read CPU allocation")
             return fail("resource_unavailable", RESOURCE_START, 503)
@@ -134,7 +133,7 @@ def register_routes(bp: Blueprint, hooks) -> None:
             return fail("parameter_invalid", PARAMETER_KMER, 400)
         if request.form.get("spades_careful") and "spades" not in assembler_list:
             return fail("parameter_invalid", parameter_message("使用 SPAdes 参数时必须选择 SPAdes。"), 400)
-        if PATH_FIELDS.intersection(request.form) or PATH_FIELDS.intersection(request.args):
+        if path_fields.intersection(request.form) or path_fields.intersection(request.args):
             return fail("path_rejected", "不能通过请求指定服务器路径。", 400)
 
         r1_session = request.form.get("r1_session", "").strip()
@@ -254,54 +253,22 @@ def register_routes(bp: Blueprint, hooks) -> None:
                 encoding="utf-8",
             )
             with connection() as db:
-                sample_id = reuse_or_create_sample(db, session["username"], sample)
-                batch_id = str(uuid.uuid4())
-                db.execute(
-                    "INSERT INTO sequencing_batches (id, owner, sample_id, r1_filename, "
-                    "r2_filename, r1_sha256, r2_sha256) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        batch_id,
-                        session["username"],
-                        sample_id,
-                        original_names[0],
-                        original_names[1],
-                        original_sha[0],
-                        original_sha[1],
-                    ),
+                insert_new_job_catalog(
+                    db,
+                    owner=session["username"],
+                    sample=sample,
+                    job_id=job_id,
+                    assembler_list=assembler_list,
+                    threads=threads,
+                    kmers_text=kmers_text or None,
+                    spades_careful=bool(request.form.get("spades_careful")),
+                    input_paths=(input_paths[0], input_paths[1]),
+                    output_dir=output_dir,
+                    log_path=log_path,
+                    original_names=original_names,
+                    original_sha=original_sha,
+                    claimed=claimed,
                 )
-                db.execute(
-                    "INSERT INTO jobs (id, owner, module_id, status, assemblers, threads, "
-                    "sample, spades_kmers, spades_careful, input_r1, input_r2, "
-                    "output_dir, log_path, sample_id, sequencing_batch_id) "
-                    "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        job_id,
-                        session["username"],
-                        BACTERIAL_ASSEMBLY_MODULE_ID,
-                        json.dumps(assembler_list),
-                        threads,
-                        sample,
-                        kmers_text or None,
-                        int(bool(request.form.get("spades_careful"))),
-                        str(input_paths[0]),
-                        str(input_paths[1]),
-                        str(output_dir),
-                        str(log_path),
-                        sample_id,
-                        batch_id,
-                    ),
-                )
-                if claimed:
-                    for upload, destination in zip(claimed, input_paths):
-                        cursor = db.execute(
-                            "UPDATE uploads SET status = 'consumed', assembled_path = ?, "
-                            "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
-                            "WHERE id = ? AND owner = ? AND status = 'completed'",
-                            (str(destination), upload["id"], session["username"]),
-                        )
-                        if cursor.rowcount != 1:
-                            raise ValueError("上传尚未完成或校验未通过，不能开始分析。")
-                note_job(db, session["username"], sample, job_id, "submitted")
         except OSError as error:
             restore_staged_reads()
             discard_stored_files(stored_files, stored_dirs)
@@ -326,9 +293,7 @@ def register_routes(bp: Blueprint, hooks) -> None:
                 except OSError:
                     pass
         try:
-            from web.job_submit import submit_analysis_task
-
-            submit_analysis_task(
+            enqueue_analysis_task(
                 job_id=job_id,
                 owner=session["username"],
                 sample=sample,
@@ -427,7 +392,7 @@ def register_routes(bp: Blueprint, hooks) -> None:
             job=serialize_job(row),
             work_items=step_view["work_items"],
             progress=step_view["progress"],
-            detail=job_detail(row, step_view),
+            detail=job_detail(connection, row, step_view),
         )
 
     @bp.get("/api/jobs/<job_id>", endpoint="job_status")
@@ -438,7 +403,7 @@ def register_routes(bp: Blueprint, hooks) -> None:
         step_view = job_step_view(row)
         job["work_items"] = step_view["work_items"]
         job["progress"] = step_view["progress"]
-        job["detail"] = job_detail(row, step_view)
+        job["detail"] = job_detail(connection, row, step_view)
         return jsonify(job=job)
 
     @bp.get("/jobs/<job_id>/fastp.html", endpoint="fastp_html")
@@ -457,7 +422,7 @@ def register_routes(bp: Blueprint, hooks) -> None:
     @login_required
     def job_report(job_id):
         row = owned_job(job_id)
-        report = job_report_model(row)
+        report = job_report_model(connection, row)
         if report is None:
             abort(404, description="这份任务还没有可导出的结果。")
         return render_template(
@@ -475,7 +440,7 @@ def register_routes(bp: Blueprint, hooks) -> None:
         if kind not in ("html", "tsv"):
             abort(404)
         row = owned_job(job_id)
-        report = job_report_model(row)
+        report = job_report_model(connection, row)
         if report is None:
             abort(404, description="这份任务还没有可导出的结果。")
         html = render_template(
@@ -578,14 +543,12 @@ def register_routes(bp: Blueprint, hooks) -> None:
             return rerun_response({"error": "原来的测序文件已经不在，不能重新分析。"}, 409)
 
         new_id = str(uuid.uuid4())
-        kept_sample_id = column_value(row, "sample_id")
-        kept_batch_id = column_value(row, "sequencing_batch_id")
         job_dir = current_app.config["JOBS_ROOT"] / new_id
         input_dir = job_dir / "input"
         output_dir = job_dir / "output"
         log_path = job_dir / "logs" / "job.log"
         try:
-            threads = app_module.read_runtime_limits()["method_threads"]
+            threads = read_runtime_limits()["method_threads"]
         except (OSError, RuntimeError, ValueError):
             current_app.logger.exception("Could not read CPU allocation")
             return rerun_response({"error": RESOURCE_START}, 503)
@@ -604,28 +567,15 @@ def register_routes(bp: Blueprint, hooks) -> None:
                 encoding="utf-8",
             )
             with connection() as db:
-                db.execute(
-                    "INSERT INTO jobs (id, owner, module_id, status, assemblers, threads, "
-                    "sample, spades_kmers, spades_careful, input_r1, input_r2, "
-                    "output_dir, log_path, rerun_of, sample_id, sequencing_batch_id) "
-                    "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        new_id,
-                        session["username"],
-                        row["module_id"],
-                        json.dumps(assemblers),
-                        threads,
-                        row["sample"],
-                        row["spades_kmers"],
-                        int(row["spades_careful"]),
-                        str(input_r1),
-                        str(input_r2),
-                        str(output_dir),
-                        str(log_path),
-                        row["id"],
-                        kept_sample_id,
-                        kept_batch_id,
-                    ),
+                insert_rerun_job_catalog(
+                    db,
+                    owner=session["username"],
+                    source_row=row,
+                    new_id=new_id,
+                    input_r1=input_r1,
+                    input_r2=input_r2,
+                    output_dir=output_dir,
+                    log_path=log_path,
                 )
         except FileNotFoundError:
             shutil.rmtree(job_dir, ignore_errors=True)
@@ -638,9 +588,7 @@ def register_routes(bp: Blueprint, hooks) -> None:
             shutil.rmtree(job_dir, ignore_errors=True)
             raise
         try:
-            from web.job_submit import submit_analysis_task
-
-            submit_analysis_task(
+            enqueue_analysis_task(
                 job_id=new_id,
                 owner=session["username"],
                 sample=row["sample"],

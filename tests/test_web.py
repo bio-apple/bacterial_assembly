@@ -1385,7 +1385,7 @@ class WebWorkbenchTests(unittest.TestCase):
     def test_unreadable_cpu_returns_resource_message(self):
         token = self.login(self.client)
         with patch(
-            "web.app.read_runtime_limits",
+            "web.routes.jobs.read_runtime_limits",
             side_effect=RuntimeError("could not read cpu"),
         ):
             response = self.submit_job(self.client, token, ("spades",))
@@ -1969,6 +1969,9 @@ class WebWorkbenchTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        megahit_filtered = output_dir / "assemblies" / "megahit"
+        megahit_filtered.mkdir(parents=True, exist_ok=True)
+        (megahit_filtered / "contigs_gt1000bp.fasta").write_text(">c\nAT\n", encoding="utf-8")
         gt500 = output_dir / "quast" / "spades" / "gt500bp"
         gt500.mkdir(parents=True)
         (gt500 / "report.tsv").write_text(

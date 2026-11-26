@@ -1,6 +1,6 @@
 """Persist each planned pipeline step without letting the browser write it."""
 
-from scripts.stage_record import planned_stages
+from scripts.pipeline_plan import planned_stages
 
 STEP_STATUSES = ("queued", "running", "succeeded", "failed", "cancelled", "skipped")
 FILE_STATUS = {

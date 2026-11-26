@@ -195,7 +195,7 @@
     if (job.detail) {
       renderResources(job.detail.resources);
       renderQc(job);
-      renderSteps(job.work_items || job.detail.steps);
+      renderSteps(job.work_items);
       renderComparison(job.detail);
       renderReports(job.detail.report_ready);
       refreshHost(job.status);

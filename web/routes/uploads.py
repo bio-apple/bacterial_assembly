@@ -14,7 +14,7 @@ from web.db_sqlite import relocate_file
 from web.errors import FASTQ_CHECK_UNAVAILABLE, FASTQ_EMPTY, FASTQ_RECORDS, parameter_message
 from web.fastq_check import FastqCheckUnavailable, FastqRecordError
 from web.ingest import validate_fastq_for_analysis
-from web.job_support import (
+from web.upload_io import (
     assemble_upload,
     chunk_byte_length,
     fastq_extension,
